@@ -261,5 +261,9 @@ def download_file(filename):
         return send_file(filepath, as_attachment=True)
     return jsonify({'error': 'File not found'}), 404
 
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok', 'service': '1008-ppt-generator'}), 200
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5008, debug=True)
