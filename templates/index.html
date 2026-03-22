@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NotebookLM-like PPT Generator</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; color: #333;}
+        h1 { color: #0056b3; }
+        .upload-area { border: 2px dashed #ccc; padding: 40px; text-align: center; margin-bottom: 20px; border-radius: 8px; cursor: pointer; background-color: white;}
+        .upload-area.dragover { background-color: #f0f8ff; border-color: #007bff; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold;}
+        textarea, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;}
+        button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;}
+        button:hover { background-color: #0056b3; }
+        #loading { display: none; margin-top: 20px; text-align: center; font-style: italic;}
+        #result { margin-top: 20px; display: none; padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; color: #155724;}
+        #error { margin-top: 20px; display: none; padding: 15px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24;}
+        #file-list { margin-top: 10px; font-size: 14px; color: #555; }
+    </style>
+</head>
+<body>
+
+    <h1>NotebookLM-like PPT Generator</h1>
+    <p>上傳你的 PPT, PDF, 或圖片，AI 會根據你的提示詞為你生成一份全新的 PowerPoint 簡報。</p>
+
+    <div class="upload-area" id="drop-zone">
+        <p>拖曳檔案至此處或點擊選擇檔案</p>
+        <p style="font-size: 12px; color: #888;">(支援格式: .pdf, .ppt, .pptx, .png, .jpg)</p>
+        <input type="file" id="file-input" multiple accept=".pdf,.ppt,.pptx,.png,.jpg,.jpeg" style="display: none;">
+    </div>
+    <div id="file-list"></div>
+
+    <div class="form-group">
+        <label for="language">輸出語言 (Output Language):</label>
+        <select id="language">
+            <option value="Traditional Chinese">繁體中文</option>
+            <option value="Simplified Chinese">简体中文</option>
+            <option value="English">English</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="prompt">自訂提示詞 (選填):</label>
+        <textarea id="prompt" rows="4" placeholder="例如：幫我做成 8 頁，使用深藍色調，著重在財務數據的分析..."></textarea>
+    </div>
+
+    <button id="generate-btn">生成簡報 (Generate)</button>
+
+    <div id="loading">
+        正在讓 AI 閱讀內容並生成簡報... 這可能需要一兩分鐘，請耐心等候。
+    </div>
+
+    <div id="result">
+        成功！ <a id="download-link" href="#" target="_blank">點此下載生成的 PowerPoint 檔案</a>
+    </div>
+
+    <div id="error"></div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileListDisplay = document.getElementById('file-list');
+        const generateBtn = document.getElementById('generate-btn');
+        const loadingDiv = document.getElementById('loading');
+        const resultDiv = document.getElementById('result');
+        const errorDiv = document.getElementById('error');
+        const downloadLink = document.getElementById('download-link');
+
+        let selectedFiles = [];
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFiles);
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles({ target: { files: e.dataTransfer.files } });
+        });
+
+        function handleFiles(event) {
+            const newFiles = Array.from(event.target.files);
+            selectedFiles = [...selectedFiles, ...newFiles];
+            updateFileList();
+        }
+
+        function updateFileList() {
+            if (selectedFiles.length === 0) {
+                fileListDisplay.innerHTML = '';
+                return;
+            }
+            const fileNames = selectedFiles.map(f => f.name).join(', ');
+            fileListDisplay.innerHTML = `<strong>已選擇檔案：</strong> ${fileNames} <br><button onclick="clearFiles()" style="margin-top:5px; padding: 5px 10px; font-size:12px; background-color: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer;">清除重新選擇</button>`;
+        }
+
+        window.clearFiles = function() {
+            selectedFiles = [];
+            fileInput.value = "";
+            updateFileList();
+        }
+
+        generateBtn.addEventListener('click', async () => {
+            if (selectedFiles.length === 0) {
+                alert('請至少上傳一個檔案。');
+                return;
+            }
+
+            const prompt = document.getElementById('prompt').value;
+            const language = document.getElementById('language').value;
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+            formData.append('prompt', prompt);
+            formData.append('language', language);
+
+            generateBtn.disabled = true;
+            loadingDiv.style.display = 'block';
+            resultDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/generate-ppt', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || '發生伺服器錯誤。');
+                }
+
+                if (data.success) {
+                    downloadLink.href = data.download_url;
+                    resultDiv.style.display = 'block';
+                } else {
+                    throw new Error('生成簡報失敗。');
+                }
+
+            } catch (error) {
+                errorDiv.textContent = `錯誤: ${error.message}`;
+                errorDiv.style.display = 'block';
+            } finally {
+                generateBtn.disabled = false;
+                loadingDiv.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
