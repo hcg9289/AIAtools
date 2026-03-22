@@ -1,0 +1,12 @@
+services:
+  ppt_generator:
+    build: .
+    container_name: ppt_generator
+    ports:
+      - '127.0.0.1:5008:5008'
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+    env_file:
+      - .env
+    restart: unless-stopped
