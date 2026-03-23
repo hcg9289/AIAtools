@@ -23,8 +23,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
-    env_file:
-      - .env
+    environment:
+      - VAULT_AI_URL=http://wa-vault-1006:5001
     restart: unless-stopped
     networks:
       - VPS-net

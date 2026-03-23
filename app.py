@@ -25,8 +25,8 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 最大上傳限制 50MB
 
-OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
-AI_MODEL = os.environ.get('AI_MODEL', 'google/gemini-3.1-flash-lite-preview')
+VAULT_AI_URL = os.environ.get('VAULT_AI_URL', 'http://wa-vault-1006:5001')
+PPT_AI_ENDPOINT = f"{VAULT_AI_URL}/api/v1/ai/ppt/1008"
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'ppt', 'pptx'}
 
 def allowed_file(filename):
@@ -150,9 +150,6 @@ def generate_ppt():
     if not files or files[0].filename == '':
         return jsonify({'error': 'No selected files'}), 400
 
-    if not OPENROUTER_API_KEY:
-        return jsonify({'error': 'Server configuration error: OPENROUTER_API_KEY is missing.'}), 500
-
     all_base64_images = []
 
     for file in files:
@@ -164,79 +161,39 @@ def generate_ppt():
             file.save(filepath)
 
             images = process_file_to_images(filepath)
-            all_base64_images.extend(images)
+            # 剝離 data URI 前綴，只傳 base64 內容給 1006
+            for img in images:
+                if ',' in img:
+                    all_base64_images.append(img.split(',', 1)[1])
+                else:
+                    all_base64_images.append(img)
 
             try:
-                 os.remove(filepath)
-            except:
-                 pass
+                os.remove(filepath)
+            except Exception:
+                pass
 
     if not all_base64_images:
         return jsonify({'error': 'Failed to process files. Ensure they are valid PDF, PPT, or Image files.'}), 400
 
-    system_instruction = f"""
-You are an expert presentation designer. Your task is to analyze the provided images (which could be PPT slides, PDF pages, or general images) and the user's prompt.
-You must generate content for a new, editable PowerPoint presentation based on this input.
-
-Rules:
-1. Target Language: MUST be {language}.
-2. Page Count: Default is 5-10 pages. If the user's prompt specifies a page count, STRICTLY follow the user's request. Otherwise, determine the best number based on the content.
-3. Color Scheme: The presentation needs background, title, and content colors. If the user's prompt specifies a color scheme or tone, STRICTLY follow it. Otherwise, derive a suitable color scheme from the provided images. Return colors in HEX format (e.g., #FFFFFF, #000000).
-4. Output Format: You MUST return ONLY a valid JSON object. Do not include markdown code blocks (` ```json `), just the raw JSON text.
-
-JSON Schema:
-{{
-  "slides": [
-    {{
-      "page_number": 1,
-      "title": "Slide Title",
-      "content": ["Bullet point 1", "Bullet point 2"], // Array of strings for body text, leave empty for title slide if needed
-      "bg_color": "#FFFFFF",
-      "title_color": "#000000",
-      "content_color": "#333333"
-    }}
-  ]
-}}
-"""
-
-    messages = [
-        {"role": "system", "content": system_instruction},
-        {"role": "user", "content": [
-            {"type": "text", "text": f"User Prompt: {prompt}\n\nPlease generate the presentation JSON."}
-        ]}
-    ]
-
-    for img in all_base64_images:
-        messages[1]["content"].append({
-            "type": "image_url",
-            "image_url": {
-                "url": img
-            }
-        })
-
     try:
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:5008",
-                "X-Title": "NotebookLM PPT Generator"
-            },
+        # 把 AI 呼叫轉發給 1006（key 統一由 1006 中央管理）
+        vault_resp = requests.post(
+            PPT_AI_ENDPOINT,
             json={
-                "model": AI_MODEL,
-                "messages": messages,
-                "response_format": {"type": "json_object"}
-            }
+                "prompt": prompt,
+                "language": language,
+                "images": all_base64_images
+            },
+            timeout=180
         )
-        response.raise_for_status()
-        result = response.json()
 
-        ai_content = result['choices'][0]['message']['content']
-        if ai_content.startswith("```json"):
-            ai_content = ai_content[7:]
-        if ai_content.endswith("```"):
-            ai_content = ai_content[:-3]
+        if vault_resp.status_code == 503:
+            return jsonify({'error': '尚未設定 API Key，請聯絡管理員。'}), 503
+        vault_resp.raise_for_status()
+
+        vault_data = vault_resp.json()
+        ai_content = vault_data.get('content', '')
 
         json_data = json.loads(ai_content)
 
