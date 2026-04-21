@@ -49,6 +49,7 @@ def get_client_ip():
 
 @app.before_request
 def verify_ott_access():
+    is_api_request = request.path.startswith('/api/')
     if request.path.startswith('/static') or request.path in ('/health',):
         return
     if request.path.endswith('.css') or request.path.endswith('.js') or request.path.endswith('.png') or request.path.endswith('.jpg') or request.path.endswith('.ico'):
@@ -56,6 +57,8 @@ def verify_ott_access():
 
     ua = request.headers.get('User-Agent', '')
     if any(bot in ua for bot in PREVIEW_BOTS):
+        if is_api_request:
+            return jsonify({'success': False, 'error': 'Unauthorized'}), 403
         return (
             '<!DOCTYPE html><html><head><meta charset="utf-8">'
             '<title>PPT Generator</title>'
