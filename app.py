@@ -7,7 +7,8 @@ import subprocess
 import requests
 import fitz  # PyMuPDF
 from PIL import Image
-from flask import Flask, render_template, request, jsonify, send_file
+from datetime import datetime, timedelta
+from flask import Flask, render_template, request, jsonify, send_file, redirect
 from werkzeug.utils import secure_filename
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
@@ -28,7 +29,75 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 VAULT_AI_URL = os.environ.get('VAULT_AI_URL', 'http://wa-vault-1006:5001')
 PPT_AI_ENDPOINT = f"{VAULT_AI_URL}/api/v1/ai/ppt/1008"
 PPT_GENERATE_ENDPOINT = f"{VAULT_AI_URL}/api/v1/ai/ppt/generate"
+VAULT_AUTH_URL = os.environ.get('VAULT_AUTH_URL', 'http://wa-vault-1006:5001/api/v1/token/validate')
+SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', str(20 * 60)))
+AUTH_SESSIONS = {}  # {sid: {"uid": str, "expiry": datetime, "ott": str}}
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'ppt', 'pptx'}
+PREVIEW_BOTS = ['WhatsApp', 'facebookexternalhit', 'Twitterbot', 'LinkedInBot', 'Slackbot']
+
+def get_client_ip():
+    cf_ip = request.headers.get('cf-connecting-ip')
+    if cf_ip:
+        return cf_ip.strip()
+    forwarded = request.headers.get('x-forwarded-for')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    real_ip = request.headers.get('x-real-ip')
+    if real_ip:
+        return real_ip.strip()
+    return request.remote_addr or '127.0.0.1'
+
+@app.before_request
+def verify_ott_access():
+    if request.path.startswith('/static') or request.path in ('/health',):
+        return
+    if request.path.endswith('.css') or request.path.endswith('.js') or request.path.endswith('.png') or request.path.endswith('.jpg') or request.path.endswith('.ico'):
+        return
+
+    ua = request.headers.get('User-Agent', '')
+    if any(bot in ua for bot in PREVIEW_BOTS):
+        return (
+            '<!DOCTYPE html><html><head><meta charset="utf-8">'
+            '<title>PPT Generator</title>'
+            '<meta property="og:title" content="PPT Generator"/>'
+            '<meta property="og:description" content="請透過 WhatsApp 取得專屬連結後使用。"/>'
+            '</head><body></body></html>',
+            200,
+            {'Content-Type': 'text/html; charset=utf-8'}
+        )
+
+    sid = request.cookies.get('auth_sid')
+    if sid:
+        session = AUTH_SESSIONS.get(sid)
+        if session and session['expiry'] > datetime.now():
+            return
+
+    ott = request.args.get('ott')
+    if ott:
+        try:
+            real_ip = get_client_ip()
+            resp = requests.get(
+                VAULT_AUTH_URL,
+                params={'token': ott},
+                headers={'CF-Connecting-IP': real_ip},
+                timeout=5
+            )
+            data = resp.json() if resp.ok else {}
+            if resp.status_code == 200 and data.get('valid'):
+                new_sid = str(uuid.uuid4())
+                AUTH_SESSIONS[new_sid] = {
+                    'uid': data.get('uid'),
+                    'expiry': datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS),
+                    'ott': ott
+                }
+                clean_url = request.path
+                out = redirect(clean_url)
+                out.set_cookie('auth_sid', new_sid, max_age=SESSION_TTL_SECONDS, httponly=True)
+                return out
+        except Exception:
+            return jsonify({'success': False, 'error': '安全服務連線異常，請稍後再試'}), 503
+
+    return jsonify({'success': False, 'error': 'Unauthorized'}), 403
 
 # AI 背景圖模式映射（1006 新端點用）
 ASPECT_RATIO_MAP = {
