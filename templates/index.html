@@ -379,7 +379,7 @@
     </div>
 
     <!-- 錯誤 -->
-    <div id="error" id="error-msg"></div>
+    <div id="error"></div>
 
 </div>
 
@@ -463,6 +463,43 @@
         });
     });
 
+    /* ── Session keepalive ────────────────────────────────────── */
+    let pingInterval = null;
+
+    function startPing() {
+        if (pingInterval) return;
+        pingInterval = setInterval(() => {
+            fetch('/api/ping').catch(() => {});
+        }, 60000);
+    }
+
+    function stopPing() {
+        if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    }
+
+    startPing();
+
+    /* ── Poll task status ─────────────────────────────────────── */
+    async function pollTaskStatus(taskId, maxWaitMs) {
+        const deadline = Date.now() + maxWaitMs;
+        while (Date.now() < deadline) {
+            await sleep(3000);
+            let resp, data;
+            try {
+                resp = await fetch(`/api/task/${taskId}`);
+                data = await resp.json();
+            } catch (e) {
+                throw new Error('輪詢時網絡中斷，請重新整理頁面後重試。');
+            }
+            if (data.status === 'done') return data;
+            if (data.status === 'error') throw new Error(data.error || 'AI 生成失敗，請稍後重試。');
+            if (data.status === 'not_found') throw new Error('任務紀錄已過期，請重新提交。');
+        }
+        throw new Error('生成逾時（超過最大等待時間），請嘗試縮減檔案大小後重試。');
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     /* ── Generate ────────────────────────────────────────────── */
     generateBtn.addEventListener('click', async () => {
         if (selectedFiles.length === 0) {
@@ -470,10 +507,11 @@
             return;
         }
 
-        const prompt    = document.getElementById('prompt').value;
+        const prompt   = document.getElementById('prompt').value;
         const language = document.getElementById('language').value;
         const hybrid   = hybridMode.checked;
         const endpoint = hybrid ? '/api/generate-ppt/hybrid' : '/api/generate-ppt';
+        const maxWait  = hybrid ? 420000 : 240000; // 7 min hybrid / 4 min standard
 
         setLoading(true);
         resultDiv.style.display = 'none';
@@ -486,26 +524,37 @@
         if (hybrid) formData.append('aspect_ratio', selectedAspect);
 
         try {
-            const resp = await fetch(endpoint, { method: 'POST', body: formData });
-            const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-            let data = null;
-
-            if (contentType.includes('application/json')) {
-                data = await resp.json();
-            } else {
-                const rawBody = await resp.text();
-                const compactBody = (rawBody || '').replace(/\s+/g, ' ').trim();
-                const bodyPreview = compactBody ? ` 回應摘要: ${compactBody.slice(0, 120)}` : '';
-                throw new Error(`授權失敗或回應格式異常（非 JSON）。請從 OTT 連結重新進入。${bodyPreview}`);
+            // Step 1: Submit upload — should respond in < 5s
+            let resp, initData;
+            try {
+                resp = await fetch(endpoint, { method: 'POST', body: formData });
+            } catch (e) {
+                throw new Error('上傳失敗：網絡連線中斷。請確認網絡狀態並重試，或重新開啟連結。');
             }
 
-            if (!resp.ok) throw new Error(data.error || '伺服器錯誤');
+            const ct = (resp.headers.get('content-type') || '').toLowerCase();
+            if (!ct.includes('application/json')) {
+                const raw = await resp.text();
+                const preview = raw.replace(/\s+/g, ' ').trim().slice(0, 120);
+                throw new Error(`授權失敗或回應格式異常（非 JSON）。請從 OTT 連結重新進入。回應摘要: ${preview}`);
+            }
 
-            downloadLink.href = data.download_url;
+            initData = await resp.json();
+            if (!resp.ok) throw new Error(initData.error || '伺服器錯誤');
+            if (!initData.task_id) throw new Error(initData.error || '無法建立生成任務');
+
+            // Step 2: Poll until done
+            const result = await pollTaskStatus(initData.task_id, maxWait);
+
+            downloadLink.href = result.download_url;
             resultDiv.style.display = 'block';
 
         } catch (err) {
-            showError(err.message);
+            if (err instanceof TypeError && err.message.toLowerCase().includes('fetch')) {
+                showError('網絡連線中斷，請確認網絡狀態後重試，或重新開啟連結。');
+            } else {
+                showError(err.message);
+            }
         } finally {
             setLoading(false);
         }

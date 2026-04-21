@@ -3,6 +3,7 @@ import io
 import json
 import base64
 import uuid
+import threading
 import subprocess
 import requests
 import fitz  # PyMuPDF
@@ -35,6 +36,21 @@ AUTH_SESSIONS = {}  # {sid: {"uid": str, "expiry": datetime, "ott": str}}
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'ppt', 'pptx'}
 PREVIEW_BOTS = ['WhatsApp', 'facebookexternalhit', 'Twitterbot', 'LinkedInBot', 'Slackbot']
 
+# Async task store — {task_id: {"status": "processing"|"done"|"error", "result": dict, "created": datetime}}
+TASKS = {}
+TASKS_LOCK = threading.Lock()
+
+TASK_TTL_SECONDS = 1800  # 30 minutes
+
+
+def _cleanup_old_tasks():
+    now = datetime.now()
+    with TASKS_LOCK:
+        stale = [k for k, v in TASKS.items() if (now - v['created']).total_seconds() > TASK_TTL_SECONDS]
+        for k in stale:
+            del TASKS[k]
+
+
 def get_client_ip():
     cf_ip = request.headers.get('cf-connecting-ip')
     if cf_ip:
@@ -46,6 +62,7 @@ def get_client_ip():
     if real_ip:
         return real_ip.strip()
     return request.remote_addr or '127.0.0.1'
+
 
 @app.before_request
 def verify_ott_access():
@@ -102,7 +119,8 @@ def verify_ott_access():
 
     return jsonify({'success': False, 'error': 'Unauthorized'}), 403
 
-# AI 背景圖模式映射（1006 新端點用）
+
+# ── AI 背景圖模式映射（1006 新端點用）───────────────────────
 ASPECT_RATIO_MAP = {
     '16:9': (16, 9),
     '4:3': (4, 3),
@@ -174,7 +192,6 @@ def _add_background_image(prs, slide, base64_img_str):
         img_bytes = base64.b64decode(base64_img_str)
         img_stream = io.BytesIO(img_bytes)
 
-        # 用 shape 新增圖片，撐滿整個 slide
         slide.shapes.add_picture(
             img_stream,
             left=0,
@@ -183,18 +200,13 @@ def _add_background_image(prs, slide, base64_img_str):
             height=prs.slide_height
         )
 
-        # 將圖片 shape 移到最底層（z-order）
-        # 找到最後加入的 shape（就是我們剛加的圖片），移到最前，再移到底
         shapes = slide.shapes
         if len(shapes) > 0:
             pic_shape = shapes[-1]
             sp_tree = slide.shapes._spTree
-            # 取得該 shape 的 XML element
             pic_elem = pic_shape._element
-            # 先移除
             sp_tree.remove(pic_elem)
-            # 再插入到最前面（z-order 最低）
-            sp_tree.insert(2, pic_elem)  # 1=nvGrpSpPr, 2= первый shape 通常在這之後
+            sp_tree.insert(2, pic_elem)
 
     except Exception as e:
         print(f"背景圖添加失敗: {e}")
@@ -216,18 +228,11 @@ def create_pptx_from_json(json_data, output_path, hybrid_mode=False):
         layout = title_slide_layout if i == 0 else bullet_slide_layout
         slide = prs.slides.add_slide(layout)
 
-        # 混合模式：優先用 AI 生成的背景圖
         bg_img_b64 = slide_data.get('background_image') if hybrid_mode else None
 
         if bg_img_b64:
-            # AI 背景圖模式：加圖片背景 + 透明文字
             _add_background_image(prs, slide, bg_img_b64)
-            # 覆蓋一層半透明黑色薄圖層（增加文字可讀性）
-            # python-pptx 不支援直接設 fill 透明度，改用色塊 shape
-            # 此處略過，保持圖片原樣
-
         else:
-            # 純色背景模式
             bg_color_hex = slide_data.get('bg_color', '#FFFFFF')
             if bg_color_hex:
                 bg = slide.background
@@ -236,7 +241,6 @@ def create_pptx_from_json(json_data, output_path, hybrid_mode=False):
                 r, g, b = hex_to_rgb(bg_color_hex)
                 fill.fore_color.rgb = RGBColor(r, g, b)
 
-        # 設定標題
         title_shape = slide.shapes.title
         if title_shape and 'title' in slide_data:
             title_shape.text = slide_data['title']
@@ -246,7 +250,6 @@ def create_pptx_from_json(json_data, output_path, hybrid_mode=False):
                     r, g, b = hex_to_rgb(title_color_hex)
                     run.font.color.rgb = RGBColor(r, g, b)
 
-        # 設定內容
         if i > 0 and 'content' in slide_data:
             body_shape = slide.shapes.placeholders[1]
             tf = body_shape.text_frame
@@ -278,16 +281,115 @@ def _strip_data_uri_prefix(img_str):
     return img_str
 
 
+# ── Background task workers ──────────────────────────────────
+
+def _run_standard_task(task_id, all_base64_images, prompt, language):
+    """Standard (non-hybrid) PPT generation — runs in background thread."""
+    try:
+        vault_resp = requests.post(
+            PPT_AI_ENDPOINT,
+            json={
+                "prompt": prompt,
+                "language": language,
+                "images": all_base64_images
+            },
+            timeout=180
+        )
+
+        if vault_resp.status_code == 503:
+            raise ValueError('尚未設定 API Key，請聯絡管理員。')
+        vault_resp.raise_for_status()
+
+        vault_data = vault_resp.json()
+        ai_content = vault_data.get('content', '')
+        json_data = json.loads(ai_content)
+
+        output_filename = f"generated_presentation_{uuid.uuid4()}.pptx"
+        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+        create_pptx_from_json(json_data, output_path, hybrid_mode=False)
+
+        with TASKS_LOCK:
+            TASKS[task_id]['status'] = 'done'
+            TASKS[task_id]['result'] = {'download_url': f'/api/download/{output_filename}'}
+
+    except Exception as e:
+        print(f"[Task {task_id}] Standard task error: {e}")
+        with TASKS_LOCK:
+            TASKS[task_id]['status'] = 'error'
+            TASKS[task_id]['result'] = {'error': str(e) or 'AI 生成失敗，請稍後重試。'}
+
+
+def _run_hybrid_task(task_id, all_base64_images, prompt, language, aspect_ratio):
+    """Hybrid (AI background) PPT generation — runs in background thread."""
+    try:
+        vault_resp = requests.post(
+            PPT_GENERATE_ENDPOINT,
+            json={
+                "prompt": prompt,
+                "language": language,
+                "images": all_base64_images,
+                "aspect_ratio": aspect_ratio
+            },
+            timeout=300
+        )
+
+        if vault_resp.status_code == 503:
+            raise ValueError('尚未設定 API Key，請聯絡管理員。')
+        vault_resp.raise_for_status()
+
+        vault_data = vault_resp.json()
+        ai_content = vault_data.get('content', '')
+        json_data = json.loads(ai_content)
+
+        output_filename = f"hybrid_presentation_{uuid.uuid4()}.pptx"
+        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+        create_pptx_from_json(json_data, output_path, hybrid_mode=True)
+
+        with TASKS_LOCK:
+            TASKS[task_id]['status'] = 'done'
+            TASKS[task_id]['result'] = {'download_url': f'/api/download/{output_filename}'}
+
+    except Exception as e:
+        print(f"[Task {task_id}] Hybrid task error: {e}")
+        with TASKS_LOCK:
+            TASKS[task_id]['status'] = 'error'
+            TASKS[task_id]['result'] = {'error': str(e) or 'AI 簡報生成失敗，請稍後重試。'}
+
+
+# ── Routes ────────────────────────────────────────────────────
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
 
+@app.route('/api/ping')
+def ping():
+    """Session keepalive — called by frontend every 60s to refresh session TTL."""
+    sid = request.cookies.get('auth_sid')
+    if sid and sid in AUTH_SESSIONS:
+        AUTH_SESSIONS[sid]['expiry'] = datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/task/<task_id>')
+def get_task_status(task_id):
+    """Poll for async task result."""
+    _cleanup_old_tasks()
+    with TASKS_LOCK:
+        task = TASKS.get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    resp = {'status': task['status']}
+    if task['result']:
+        resp.update(task['result'])
+    return jsonify(resp)
+
+
 @app.route('/api/generate-ppt', methods=['POST'])
 def generate_ppt():
     """
-    純文字版（向後相容）：AI 生成文字簡報內容，無背景圖。
-    對應 1006 舊端點 POST /api/v1/ai/ppt/1008
+    標準模式（無背景圖）：接收上傳，立即回傳 task_id，AI 呼叫在 background thread 執行。
     """
     if 'files' not in request.files:
         return jsonify({'error': 'No files uploaded'}), 400
@@ -320,49 +422,24 @@ def generate_ppt():
     if not all_base64_images:
         return jsonify({'error': 'Failed to process files. Ensure they are valid PDF, PPT, or Image files.'}), 400
 
-    try:
-        vault_resp = requests.post(
-            PPT_AI_ENDPOINT,
-            json={
-                "prompt": prompt,
-                "language": language,
-                "images": all_base64_images
-            },
-            timeout=180
-        )
+    task_id = str(uuid.uuid4())
+    with TASKS_LOCK:
+        TASKS[task_id] = {'status': 'processing', 'result': None, 'created': datetime.now()}
 
-        if vault_resp.status_code == 503:
-            return jsonify({'error': '尚未設定 API Key，請聯絡管理員。'}), 503
-        vault_resp.raise_for_status()
+    t = threading.Thread(
+        target=_run_standard_task,
+        args=(task_id, all_base64_images, prompt, language),
+        daemon=True
+    )
+    t.start()
 
-        vault_data = vault_resp.json()
-        ai_content = vault_data.get('content', '')
-
-        json_data = json.loads(ai_content)
-
-        output_filename = f"generated_presentation_{uuid.uuid4()}.pptx"
-        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-
-        create_pptx_from_json(json_data, output_path, hybrid_mode=False)
-
-        return jsonify({
-            'success': True,
-            'download_url': f"/api/download/{output_filename}"
-        })
-
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({'error': 'Failed to communicate with AI service or generate PPT.'}), 500
+    return jsonify({'task_id': task_id, 'status': 'processing'})
 
 
 @app.route('/api/generate-ppt/hybrid', methods=['POST'])
 def generate_ppt_hybrid():
     """
-    混合模式簡報生成（AI 背景圖 + 可編輯文字）。
-    對應 1006 新端點 POST /api/v1/ai/ppt/generate
-    - 支援 aspect_ratio 參數（預設 16:9）
-    - 回傳的 slides 含 background_image 時，PPTX 該頁使用背景圖
-    - 無 background_image 時降級為純色背景
+    混合模式（AI 背景圖）：接收上傳，立即回傳 task_id，AI 呼叫在 background thread 執行。
     """
     if 'files' not in request.files:
         return jsonify({'error': 'No files uploaded'}), 400
@@ -399,40 +476,18 @@ def generate_ppt_hybrid():
     if not all_base64_images:
         return jsonify({'error': 'Failed to process files. Ensure they are valid PDF, PPT, or Image files.'}), 400
 
-    try:
-        vault_resp = requests.post(
-            PPT_GENERATE_ENDPOINT,
-            json={
-                "prompt": prompt,
-                "language": language,
-                "images": all_base64_images,
-                "aspect_ratio": aspect_ratio
-            },
-            timeout=300  # Imagen 生成較慢，給更多時間
-        )
+    task_id = str(uuid.uuid4())
+    with TASKS_LOCK:
+        TASKS[task_id] = {'status': 'processing', 'result': None, 'created': datetime.now()}
 
-        if vault_resp.status_code == 503:
-            return jsonify({'error': '尚未設定 API Key，請聯絡管理員。'}), 503
-        vault_resp.raise_for_status()
+    t = threading.Thread(
+        target=_run_hybrid_task,
+        args=(task_id, all_base64_images, prompt, language, aspect_ratio),
+        daemon=True
+    )
+    t.start()
 
-        vault_data = vault_resp.json()
-        ai_content = vault_data.get('content', '')
-
-        json_data = json.loads(ai_content)
-
-        output_filename = f"hybrid_presentation_{uuid.uuid4()}.pptx"
-        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-
-        create_pptx_from_json(json_data, output_path, hybrid_mode=True)
-
-        return jsonify({
-            'success': True,
-            'download_url': f"/api/download/{output_filename}"
-        })
-
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({'error': 'AI 簡報生成失敗。'}), 500
+    return jsonify({'task_id': task_id, 'status': 'processing'})
 
 
 @app.route('/api/download/<filename>')
