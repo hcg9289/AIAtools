@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
@@ -352,12 +352,93 @@ def _coerce_body_blocks(slide_data):
     if isinstance(blocks, list) and blocks:
         return blocks
 
+    anchors = slide_data.get('text_anchors')
+    if isinstance(anchors, list):
+        anchor_blocks = []
+        for anchor in anchors:
+            if not isinstance(anchor, dict):
+                continue
+            anchor_type = str(anchor.get('type') or anchor.get('kind') or '').lower()
+            if anchor_type == 'title':
+                continue
+            text = str(anchor.get('text') or anchor.get('value') or '').strip()
+            supporting = str(anchor.get('supporting_text') or anchor.get('label') or '').strip()
+            if text and supporting:
+                anchor_blocks.append({'type': 'bullet', 'text': f'{text}: {supporting}'})
+            elif text:
+                anchor_blocks.append({'type': 'bullet', 'text': text})
+        if anchor_blocks:
+            return anchor_blocks
+
     content = slide_data.get('content', [])
     if isinstance(content, str):
         content = [content]
     if isinstance(content, list):
         return [{'type': 'bullet', 'text': item} for item in content if str(item).strip()]
     return []
+
+
+def _clamp_float(value, default, min_value, max_value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+def _coerce_anchor_align(value):
+    align = str(value or 'left').strip().lower()
+    if align in ('center', 'middle'):
+        return PP_ALIGN.CENTER
+    if align in ('right', 'end'):
+        return PP_ALIGN.RIGHT
+    return PP_ALIGN.LEFT
+
+
+def _coerce_text_anchors(slide_data, defaults):
+    anchors = slide_data.get('text_anchors')
+    if not isinstance(anchors, list):
+        return []
+
+    normalized = []
+    for raw in anchors[:8]:
+        if not isinstance(raw, dict):
+            continue
+        text = str(raw.get('text') or raw.get('value') or '').strip()
+        supporting = str(raw.get('supporting_text') or raw.get('label') or '').strip()
+        if not text and not supporting:
+            continue
+
+        box = raw.get('box') if isinstance(raw.get('box'), dict) else raw
+        x = _clamp_float(box.get('x'), 0.08, 0.02, 0.96)
+        y = _clamp_float(box.get('y'), 0.08, 0.02, 0.96)
+        w = _clamp_float(box.get('w'), 0.22, 0.05, 0.72)
+        h = _clamp_float(box.get('h'), 0.12, 0.04, 0.42)
+        w = min(w, 0.98 - x)
+        h = min(h, 0.98 - y)
+        if w < 0.04 or h < 0.04:
+            continue
+
+        anchor_type = str(raw.get('type') or raw.get('kind') or 'label').strip().lower()
+        default_color = defaults['title_color'] if anchor_type == 'title' else defaults['content_color']
+        font_size = _clamp_float(raw.get('font_size'), 28 if anchor_type == 'title' else 16, 8, 44)
+        normalized.append({
+            'id': str(raw.get('id') or f'anchor_{len(normalized) + 1}'),
+            'type': anchor_type,
+            'text': text,
+            'supporting_text': supporting,
+            'box': (x, y, w, h),
+            'align': _coerce_anchor_align(raw.get('align')),
+            'font_size': font_size,
+            'color': _safe_hex(raw.get('color') or default_color, default_color),
+            'supporting_color': _safe_hex(raw.get('supporting_color') or defaults['content_color'], defaults['content_color']),
+            'pad': bool(raw.get('pad', anchor_type != 'title')),
+            'pad_color': _safe_hex(raw.get('pad_color') or defaults['anchor_pad_color'], defaults['anchor_pad_color']),
+            'pad_opacity': _clamp_float(raw.get('pad_opacity'), 0.70, 0.18, 0.94),
+            'connector': raw.get('connector') if isinstance(raw.get('connector'), dict) else None,
+        })
+
+    return normalized
 
 
 def _normalize_slide(slide_data, index, deck_defaults):
@@ -370,6 +451,7 @@ def _normalize_slide(slide_data, index, deck_defaults):
     title_color = _safe_hex(slide_data.get('title_color') or colors.get('title'), '#FFFFFF')
     content_color = _safe_hex(slide_data.get('content_color') or colors.get('content'), '#E5E7EB')
     accent_color = _safe_hex(slide_data.get('accent_color') or colors.get('accent'), '#60A5FA')
+    anchor_pad_color = _safe_hex(slide_data.get('anchor_pad_color') or colors.get('anchor_pad') or '#FFFFFF', '#FFFFFF')
 
     overlay = slide_data.get('overlay') if isinstance(slide_data.get('overlay'), dict) else {}
     overlay_color = _safe_hex(overlay.get('color') or slide_data.get('overlay_color') or '#050816', '#050816')
@@ -380,15 +462,27 @@ def _normalize_slide(slide_data, index, deck_defaults):
         overlay_opacity = 0.46
     overlay_opacity = max(0.0, min(0.82, overlay_opacity))
 
+    defaults = {
+        'title_color': title_color,
+        'content_color': content_color,
+        'accent_color': accent_color,
+        'anchor_pad_color': anchor_pad_color,
+    }
+
     return {
         'title': title,
         'role': slide_data.get('role') or ('cover' if index == 0 else 'content'),
+        'render_mode': str(slide_data.get('render_mode') or '').strip().lower(),
+        'visual_metaphor': slide_data.get('visual_metaphor') or '',
+        'meaning_map': slide_data.get('meaning_map') if isinstance(slide_data.get('meaning_map'), dict) else {},
         'layout': layout,
         'body_blocks': body_blocks,
+        'text_anchors': _coerce_text_anchors(slide_data, defaults),
         'bg_color': bg_color,
         'title_color': title_color,
         'content_color': content_color,
         'accent_color': accent_color,
+        'anchor_pad_color': anchor_pad_color,
         'overlay_color': overlay_color,
         'overlay_opacity': overlay_opacity,
         'background_image': slide_data.get('background_image'),
@@ -402,11 +496,145 @@ def _add_overlay(slide, box, color_hex, opacity):
     shape.line.fill.background()
     shape.fill.solid()
     shape.fill.fore_color.rgb = _rgb(color_hex)
-    try:
-        shape.fill.transparency = opacity
-    except Exception:
-        shape.fill.transparency = int(opacity * 100)
+    _set_shape_opacity(shape, opacity)
     return shape
+
+
+def _set_shape_opacity(shape, opacity):
+    opacity = _clamp_float(opacity, 0.70, 0.0, 1.0)
+    transparency = int(round((1.0 - opacity) * 100))
+    try:
+        shape.fill.transparency = transparency
+    except Exception:
+        shape.fill.transparency = float(transparency)
+
+
+def _normalized_box_to_inches(box):
+    x, y, w, h = box
+    return (
+        x * 13.333,
+        y * 7.5,
+        w * 13.333,
+        h * 7.5,
+    )
+
+
+def _normalized_point_to_inches(point):
+    if not isinstance(point, dict):
+        return None
+    try:
+        x = _clamp_float(point.get('x'), 0.5, 0.0, 1.0) * 13.333
+        y = _clamp_float(point.get('y'), 0.5, 0.0, 1.0) * 7.5
+    except Exception:
+        return None
+    return x, y
+
+
+def _render_connector(slide, connector, color_hex):
+    if not isinstance(connector, dict):
+        return
+    start = _normalized_point_to_inches(connector.get('from') or connector.get('start'))
+    end = _normalized_point_to_inches(connector.get('to') or connector.get('end'))
+    if not start or not end:
+        return
+
+    line = slide.shapes.add_connector(
+        MSO_CONNECTOR.STRAIGHT,
+        Inches(start[0]),
+        Inches(start[1]),
+        Inches(end[0]),
+        Inches(end[1]),
+    )
+    line.line.color.rgb = _rgb(color_hex)
+    line.line.width = Pt(1.3)
+
+    dot_size = 0.08
+    dot = slide.shapes.add_shape(
+        MSO_SHAPE.OVAL,
+        Inches(start[0] - dot_size / 2),
+        Inches(start[1] - dot_size / 2),
+        Inches(dot_size),
+        Inches(dot_size),
+    )
+    dot.line.color.rgb = _rgb(color_hex)
+    dot.fill.solid()
+    dot.fill.fore_color.rgb = _rgb(color_hex)
+
+
+def _render_anchor_text(slide, anchor, slide_info):
+    x, y, w, h = _normalized_box_to_inches(anchor['box'])
+    if anchor['pad']:
+        pad = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(x),
+            Inches(y),
+            Inches(w),
+            Inches(h),
+        )
+        pad.line.color.rgb = _rgb(anchor['pad_color'])
+        pad.line.transparency = 70
+        pad.fill.solid()
+        pad.fill.fore_color.rgb = _rgb(anchor['pad_color'])
+        _set_shape_opacity(pad, anchor['pad_opacity'])
+
+    textbox = _add_textbox(slide, (x + 0.03, y + 0.02, max(0.1, w - 0.06), max(0.1, h - 0.04)))
+    tf = textbox.text_frame
+    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+
+    anchor_type = anchor['type']
+    is_title = anchor_type == 'title'
+    is_stat = anchor_type in ('stat', 'metric', 'number')
+    text_size = anchor['font_size']
+    if is_stat:
+        text_size = max(text_size, 24)
+
+    _paragraph(
+        tf,
+        anchor['text'],
+        text_size,
+        anchor['color'],
+        bold=is_title or is_stat,
+        align=anchor['align'],
+        space_after=3 if anchor.get('supporting_text') else 0,
+    )
+    if anchor.get('supporting_text'):
+        supporting_size = max(9, min(text_size - 4, text_size * 0.72))
+        _paragraph(
+            tf,
+            anchor['supporting_text'],
+            supporting_size,
+            anchor['supporting_color'],
+            bold=False,
+            align=anchor['align'],
+            space_after=0,
+        )
+
+
+def _render_anchor_slide(slide, slide_info, index, total):
+    anchors = list(slide_info['text_anchors'])
+    has_title_anchor = any(anchor['type'] == 'title' for anchor in anchors)
+    if not has_title_anchor and slide_info['title']:
+        anchors.insert(0, {
+            'id': 'title_auto',
+            'type': 'title',
+            'text': slide_info['title'],
+            'supporting_text': '',
+            'box': (0.06, 0.06, 0.48, 0.12),
+            'align': PP_ALIGN.LEFT,
+            'font_size': 30,
+            'color': slide_info['title_color'],
+            'supporting_color': slide_info['content_color'],
+            'pad': False,
+            'pad_color': slide_info['anchor_pad_color'],
+            'pad_opacity': 0.0,
+            'connector': None,
+        })
+
+    for anchor in anchors:
+        _render_connector(slide, anchor.get('connector'), slide_info['accent_color'])
+    for anchor in anchors:
+        _render_anchor_text(slide, anchor, slide_info)
+    _render_footer(slide, slide_info, index, total)
 
 
 def _estimate_body_size(blocks):
@@ -450,9 +678,27 @@ def _render_body_blocks(slide, box, slide_info, align):
             _paragraph(tf, f'{prefix}{text}', body_size, slide_info['content_color'], align=align, space_after=7)
 
 
+def _render_footer(slide, slide_info, index, total):
+    marker = f'{index + 1:02d}/{total:02d}'
+    footer_text = slide_info['footer']
+    if footer_text:
+        marker = f'{footer_text}  |  {marker}'
+    footer_shape = _add_textbox(slide, (0.78, 6.92, 11.80, 0.28), vertical_anchor=MSO_ANCHOR.MIDDLE)
+    _paragraph(footer_shape.text_frame, marker, 9, slide_info['content_color'], align=PP_ALIGN.RIGHT, space_after=0)
+
+
 def _render_slide(slide, prs, slide_info, index, total, hybrid_mode):
     _set_slide_background(slide, slide_info['bg_color'])
     has_bg_image = bool(hybrid_mode and slide_info.get('background_image') and _add_background_image(prs, slide, slide_info['background_image']))
+    use_anchor_mode = bool(
+        has_bg_image
+        and slide_info.get('text_anchors')
+        and slide_info.get('render_mode') != 'fallback_layout'
+    )
+
+    if use_anchor_mode:
+        _render_anchor_slide(slide, slide_info, index, total)
+        return
 
     box = LAYOUT_BOXES[slide_info['layout']]
     align = PP_ALIGN.CENTER if slide_info['layout'] == 'center' else PP_ALIGN.LEFT
@@ -468,12 +714,7 @@ def _render_slide(slide, prs, slide_info, index, total, hybrid_mode):
 
     _render_body_blocks(slide, box, slide_info, align)
 
-    marker = f'{index + 1:02d}/{total:02d}'
-    footer_text = slide_info['footer']
-    if footer_text:
-        marker = f'{footer_text}  |  {marker}'
-    footer_shape = _add_textbox(slide, (0.78, 6.92, 11.80, 0.28), vertical_anchor=MSO_ANCHOR.MIDDLE)
-    _paragraph(footer_shape.text_frame, marker, 9, slide_info['content_color'], align=PP_ALIGN.RIGHT, space_after=0)
+    _render_footer(slide, slide_info, index, total)
 
 
 def create_pptx_from_json(json_data, output_path, hybrid_mode=False):
