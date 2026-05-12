@@ -23,13 +23,13 @@
             --accent-green-dim: rgba(52, 211, 153, 0.15);
             --accent-amber: #fbbf24;
             --accent-amber-dim: rgba(251, 191, 36, 0.15);
-            --radius: 12px;
+            --radius: 8px;
             --radius-sm: 8px;
             --shadow: 0 4px 24px rgba(0,0,0,0.4);
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans TC', 'Microsoft JhengHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
@@ -235,7 +235,7 @@
         #generate-btn {
             width: 100%;
             padding: 14px;
-            background: linear-gradient(135deg, #4f8ef7 0%, #6d5df7 100%);
+            background: #2563eb;
             border: none;
             border-radius: var(--radius-sm);
             color: white;
@@ -296,51 +296,20 @@
 
 <div class="header">
     <div class="header-badge">✨ AI Powered</div>
-    <h1>AI PPT Generator</h1>
-    <p>上傳 PDF、簡報或圖片，AI 為你生成專業簡報</p>
+    <h1>Prompt-first PPT Generator</h1>
+    <p>先說明你想做成什麼 PPT，再讓素材服務你的意圖</p>
 </div>
 
 <div class="container">
 
-    <!-- 上傳區塊 -->
-    <div class="card">
-        <div class="card-title"><div class="card-title-dot"></div>STEP 1 — 上傳原始文件</div>
-        <div class="upload-zone" id="drop-zone">
-            <div class="upload-icon">📄</div>
-            <div class="upload-text">拖曳檔案至此或 <strong>點擊選擇</strong></div>
-            <div class="upload-hint">支援 PDF、PPT、PPTX、PNG、JPG</div>
-            <input type="file" id="file-input" multiple accept=".pdf,.ppt,.pptx,.png,.jpg,.jpeg">
-        </div>
-        <div class="file-list" id="file-list"></div>
-    </div>
-
     <!-- 設定區塊 -->
     <div class="card">
-        <div class="card-title"><div class="card-title-dot"></div>STEP 2 — 設定生成偏好</div>
+        <div class="card-title"><div class="card-title-dot"></div>STEP 1 — 說明你想做成什麼 PPT</div>
 
-        <!-- 混合模式開關 -->
-        <div class="hybrid-row">
-            <div class="hybrid-row-left">
-                <div class="hybrid-title">
-                    AI 背景圖生成 <span>BETA</span>
-                </div>
-                <div class="hybrid-desc">開啟後，AI 為每頁生成精美背景圖（需要 Imagen API Key）</div>
-            </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="hybrid-mode">
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-
-        <!-- 比例選擇（僅混合模式顯示） -->
-        <div id="aspect-section" style="display:none;">
-            <div class="form-label">簡報比例</div>
-            <div class="aspect-row">
-                <button class="aspect-btn active" data-ratio="16:9">16:9<br><span style="font-size:11px;color:var(--text-muted)">寬螢幕</span></button>
-                <button class="aspect-btn" data-ratio="4:3">4:3<br><span style="font-size:11px;color:var(--text-muted)">標準</span></button>
-                <button class="aspect-btn" data-ratio="1:1">1:1<br><span style="font-size:11px;color:var(--text-muted)">正方形</span></button>
-                <button class="aspect-btn" data-ratio="9:16">9:16<br><span style="font-size:11px;color:var(--text-muted)">直式</span></button>
-            </div>
+        <!-- 提示詞 -->
+        <div class="form-group">
+            <div class="form-label">核心提示詞（必填）</div>
+            <textarea id="prompt" rows="5" placeholder="例如：把素材重組成 8 頁投資人簡報，受眾是高淨值客戶，風格要像高級金融顧問提案，重點突出痛點、方案、收益邏輯與下一步行動。"></textarea>
         </div>
 
         <!-- 語言 -->
@@ -353,11 +322,42 @@
             </select>
         </div>
 
-        <!-- 提示詞 -->
-        <div class="form-group">
-            <div class="form-label">自訂提示詞（選填）</div>
-            <textarea id="prompt" rows="3" placeholder="例如：幫我生成 8 頁，採用深藍色商務風格，著重在年度財務數據分析與未來展望..."></textarea>
+        <!-- 混合模式開關 -->
+        <div class="hybrid-row">
+            <div class="hybrid-row-left">
+                <div class="hybrid-title">
+                    圖片背景 + 可編輯文字 <span>DEFAULT</span>
+                </div>
+                <div class="hybrid-desc">每頁生成完整背景，文字仍保留為可編輯 PPT 文字框</div>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="hybrid-mode" checked>
+                <span class="toggle-slider"></span>
+            </label>
         </div>
+
+        <!-- 比例選擇（僅混合模式顯示） -->
+        <div id="aspect-section" style="display:block;">
+            <div class="form-label">簡報比例</div>
+            <div class="aspect-row">
+                <button class="aspect-btn active" data-ratio="16:9">16:9<br><span style="font-size:11px;color:var(--text-muted)">寬螢幕</span></button>
+                <button class="aspect-btn" data-ratio="4:3">4:3<br><span style="font-size:11px;color:var(--text-muted)">標準</span></button>
+                <button class="aspect-btn" data-ratio="1:1">1:1<br><span style="font-size:11px;color:var(--text-muted)">正方形</span></button>
+                <button class="aspect-btn" data-ratio="9:16">9:16<br><span style="font-size:11px;color:var(--text-muted)">直式</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上傳區塊 -->
+    <div class="card">
+        <div class="card-title"><div class="card-title-dot"></div>STEP 2 — 上傳素材（選填）</div>
+        <div class="upload-zone" id="drop-zone">
+            <div class="upload-icon">📄</div>
+            <div class="upload-text">拖曳 PDF、PPT 或圖片至此，或 <strong>點擊選擇</strong></div>
+            <div class="upload-hint">素材會作為證據與風格參考；沒有素材也會生成完整 PPT</div>
+            <input type="file" id="file-input" multiple accept=".pdf,.ppt,.pptx,.png,.jpg,.jpeg">
+        </div>
+        <div class="file-list" id="file-list"></div>
     </div>
 
     <!-- 生成按鈕 -->
@@ -369,8 +369,8 @@
     <!-- Loading -->
     <div id="loading">
         <div class="spinner"></div>
-        <div class="loading-text">AI 正在分析文件並生成簡報...</div>
-        <div class="loading-sub">混合模式（背景圖）預計需要 1-2 分鐘，請勿關閉頁面</div>
+        <div class="loading-text">AI 正在理解提示詞、素材與簡報敘事...</div>
+        <div class="loading-sub">背景圖 + 可編輯文字模式通常需要 1-3 分鐘，請勿關閉頁面</div>
     </div>
 
     <!-- 結果 -->
@@ -384,7 +384,7 @@
 </div>
 
 <div class="footer">
-    Power by Gemini + Imagen · 1006 中央 AI 引擎
+    Powered by Gemini + Imagen · 1006 中央 AI 引擎
 </div>
 
 <script>
@@ -502,16 +502,16 @@
 
     /* ── Generate ────────────────────────────────────────────── */
     generateBtn.addEventListener('click', async () => {
-        if (selectedFiles.length === 0) {
-            showError('請至少上傳一個檔案。');
-            return;
-        }
-
-        const prompt   = document.getElementById('prompt').value;
+        const prompt   = document.getElementById('prompt').value.trim();
         const language = document.getElementById('language').value;
         const hybrid   = hybridMode.checked;
         const endpoint = hybrid ? '/api/generate-ppt/hybrid' : '/api/generate-ppt';
         const maxWait  = hybrid ? 420000 : 240000; // 7 min hybrid / 4 min standard
+
+        if (!prompt) {
+            showError('請先輸入核心提示詞，說明你想做成什麼 PPT。');
+            return;
+        }
 
         setLoading(true);
         resultDiv.style.display = 'none';
