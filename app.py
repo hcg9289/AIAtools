@@ -146,8 +146,19 @@ ASPECT_RATIO_MAP = {
 }
 
 
+def _filename_extension(filename):
+    return os.path.splitext(filename or '')[1].lower().lstrip('.')
+
+
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return _filename_extension(filename) in ALLOWED_EXTENSIONS
+
+
+def _safe_upload_filename(original_filename):
+    ext = _filename_extension(original_filename)
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValueError(f"不支援的檔案格式：{original_filename}")
+    return f"upload_{uuid.uuid4()}.{ext}"
 
 
 def pdf_to_base64_images(pdf_path):
@@ -180,11 +191,14 @@ def convert_ppt_to_pdf(ppt_path, output_dir):
 
 
 def process_file_to_images(filepath):
-    ext = filepath.rsplit('.', 1)[1].lower()
+    ext = _filename_extension(filepath)
+    if ext not in ALLOWED_EXTENSIONS:
+        return []
     if ext in ['png', 'jpg', 'jpeg']:
         with open(filepath, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-            return [f"data:image/{ext};base64,{encoded_string}"]
+            mime_ext = 'jpeg' if ext == 'jpg' else ext
+            return [f"data:image/{mime_ext};base64,{encoded_string}"]
     elif ext == 'pdf':
         return pdf_to_base64_images(filepath)
     elif ext in ['ppt', 'pptx']:
@@ -516,15 +530,17 @@ def _collect_uploaded_images(files):
         if not allowed_file(file.filename):
             continue
         processed_any_file = True
-        filename = secure_filename(file.filename)
-        safe_filename = f"{uuid.uuid4()}_{filename}"
+        safe_filename = _safe_upload_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
-        file.save(filepath)
 
         try:
+            file.save(filepath)
             images = process_file_to_images(filepath)
             for img in images:
                 all_base64_images.append(_strip_data_uri_prefix(img))
+        except Exception as e:
+            original_name = secure_filename(file.filename) or file.filename
+            raise ValueError(f"素材解析失敗：{original_name}") from e
         finally:
             try:
                 os.remove(filepath)
@@ -671,7 +687,10 @@ def generate_ppt():
     if not prompt:
         return jsonify({'error': '請輸入核心提示詞，說明你想做成什麼 PPT。'}), 400
 
-    all_base64_images, processed_any_file = _collect_uploaded_images(files)
+    try:
+        all_base64_images, processed_any_file = _collect_uploaded_images(files)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     if processed_any_file and not all_base64_images:
         return jsonify({'error': '素材解析失敗。請確認檔案為有效 PDF、PPT、PPTX、PNG 或 JPG。'}), 400
 
@@ -705,7 +724,10 @@ def generate_ppt_hybrid():
     if not prompt:
         return jsonify({'error': '請輸入核心提示詞，說明你想做成什麼 PPT。'}), 400
 
-    all_base64_images, processed_any_file = _collect_uploaded_images(files)
+    try:
+        all_base64_images, processed_any_file = _collect_uploaded_images(files)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     if processed_any_file and not all_base64_images:
         return jsonify({'error': '素材解析失敗。請確認檔案為有效 PDF、PPT、PPTX、PNG 或 JPG。'}), 400
 

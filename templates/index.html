@@ -536,7 +536,7 @@
             if (!ct.includes('application/json')) {
                 const raw = await resp.text();
                 const preview = raw.replace(/\s+/g, ' ').trim().slice(0, 120);
-                throw new Error(`授權失敗或回應格式異常（非 JSON）。請從 OTT 連結重新進入。回應摘要: ${preview}`);
+                throw new Error(`伺服器回應格式異常（非 JSON）。若連結已過期請從 OTT 重新進入；若仍然發生，請查看 1008 後端日誌。回應摘要: ${preview}`);
             }
 
             initData = await resp.json();
