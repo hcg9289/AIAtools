@@ -413,8 +413,20 @@ def _coerce_text_anchors(slide_data, defaults):
     if not isinstance(anchors, list):
         return []
 
+    def anchor_priority(raw):
+        if not isinstance(raw, dict):
+            return 99
+        anchor_type = str(raw.get('type') or raw.get('kind') or '').strip().lower()
+        if anchor_type == 'title':
+            return 0
+        if str(raw.get('evidence_ref') or raw.get('evidence_id') or '').strip():
+            return 1
+        if str(raw.get('bind_to') or raw.get('visual_element') or '').strip():
+            return 2
+        return 3
+
     normalized = []
-    for raw in anchors[:8]:
+    for raw in sorted(anchors, key=anchor_priority)[:8]:
         if not isinstance(raw, dict):
             continue
         text = str(raw.get('text') or raw.get('value') or '').strip()
@@ -442,7 +454,11 @@ def _coerce_text_anchors(slide_data, defaults):
         bind_to = str(raw.get('bind_to') or raw.get('visual_element') or '').strip()
         connector_default = bool(bind_to and anchor_type != 'title')
         pad_enabled = _coerce_bool(raw.get('pad'), anchor_type != 'title')
-        if pad_enabled and (w > 0.38 or h > 0.22 or (w * h) > 0.075):
+        if anchor_type != 'title':
+            w = min(w, 0.34)
+            h = min(h, 0.20)
+            font_size = min(font_size, 18)
+        if pad_enabled and (w > 0.34 or h > 0.20 or (w * h) > 0.062):
             pad_enabled = False
         normalized.append({
             'id': str(raw.get('id') or f'anchor_{len(normalized) + 1}'),
@@ -559,11 +575,15 @@ def _normalized_point_to_inches(point):
 
 def _has_structural_anchors(slide_info):
     anchors = slide_info.get('text_anchors') or []
-    valid = 0
+    content_valid = 0
+    evidence_valid = 0
     for anchor in anchors:
-        if anchor.get('text') and anchor.get('bind_to'):
-            valid += 1
-    return valid >= 2
+        if not anchor.get('text') or not anchor.get('bind_to') or anchor.get('type') == 'title':
+            continue
+        content_valid += 1
+        if anchor.get('evidence_ref'):
+            evidence_valid += 1
+    return content_valid >= 2 and (evidence_valid >= 2 or content_valid >= 4)
 
 
 def _synthesize_anchor_connector(anchor):
@@ -642,9 +662,16 @@ def _render_anchor_text(slide, anchor, slide_info):
     anchor_type = anchor['type']
     is_title = anchor_type == 'title'
     is_stat = anchor_type in ('stat', 'metric', 'number')
+    dense_anchor_count = sum(
+        1 for item in slide_info.get('text_anchors', [])
+        if item.get('type') != 'title' and item.get('text') and item.get('bind_to')
+    )
+    dense_mode = dense_anchor_count >= 4
     text_size = anchor['font_size']
     if is_stat:
-        text_size = max(text_size, 24)
+        text_size = max(text_size, 20 if dense_mode else 24)
+    if dense_mode and not is_title:
+        text_size = min(text_size, 20 if is_stat else 16)
 
     _paragraph(
         tf,
