@@ -436,6 +436,7 @@ def _coerce_text_anchors(slide_data, defaults):
         default_color = defaults['title_color'] if anchor_type == 'title' else defaults['content_color']
         font_size = _clamp_float(raw.get('font_size'), 28 if anchor_type == 'title' else 16, 8, 44)
         bind_to = str(raw.get('bind_to') or raw.get('visual_element') or '').strip()
+        connector_default = bool(bind_to and anchor_type != 'title')
         pad_enabled = _coerce_bool(raw.get('pad'), anchor_type != 'title')
         if pad_enabled and (w > 0.38 or h > 0.22 or (w * h) > 0.075):
             pad_enabled = False
@@ -455,7 +456,7 @@ def _coerce_text_anchors(slide_data, defaults):
             'pad': pad_enabled,
             'pad_color': _safe_hex(raw.get('pad_color') or defaults['anchor_pad_color'], defaults['anchor_pad_color']),
             'pad_opacity': _clamp_float(raw.get('pad_opacity'), 0.48, 0.16, 0.68),
-            'connector_required': _coerce_bool(raw.get('connector_required'), False),
+            'connector_required': _coerce_bool(raw.get('connector_required'), connector_default),
             'connector': raw.get('connector') if isinstance(raw.get('connector'), dict) else None,
             'target_point': raw.get('target_point') if isinstance(raw.get('target_point'), dict) else None,
         })
