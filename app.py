@@ -435,6 +435,10 @@ def _coerce_text_anchors(slide_data, defaults):
         anchor_type = str(raw.get('type') or raw.get('kind') or 'label').strip().lower()
         default_color = defaults['title_color'] if anchor_type == 'title' else defaults['content_color']
         font_size = _clamp_float(raw.get('font_size'), 28 if anchor_type == 'title' else 16, 8, 44)
+        if anchor_type == 'title':
+            w = max(w, min(0.62 if len(text) > 18 else 0.50, 0.98 - x))
+            h = max(h, 0.15 if len(text) > 18 else 0.12)
+            font_size = min(font_size, 32 if len(text) > 18 else 34)
         bind_to = str(raw.get('bind_to') or raw.get('visual_element') or '').strip()
         connector_default = bool(bind_to and anchor_type != 'title')
         pad_enabled = _coerce_bool(raw.get('pad'), anchor_type != 'title')
