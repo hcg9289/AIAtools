@@ -395,6 +395,19 @@ def _coerce_anchor_align(value):
     return PP_ALIGN.LEFT
 
 
+def _coerce_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in ('1', 'true', 'yes', 'y', 'on'):
+        return True
+    if text in ('0', 'false', 'no', 'n', 'off'):
+        return False
+    return default
+
+
 def _coerce_text_anchors(slide_data, defaults):
     anchors = slide_data.get('text_anchors')
     if not isinstance(anchors, list):
@@ -422,20 +435,29 @@ def _coerce_text_anchors(slide_data, defaults):
         anchor_type = str(raw.get('type') or raw.get('kind') or 'label').strip().lower()
         default_color = defaults['title_color'] if anchor_type == 'title' else defaults['content_color']
         font_size = _clamp_float(raw.get('font_size'), 28 if anchor_type == 'title' else 16, 8, 44)
+        bind_to = str(raw.get('bind_to') or raw.get('visual_element') or '').strip()
+        pad_enabled = _coerce_bool(raw.get('pad'), anchor_type != 'title')
+        if pad_enabled and (w > 0.38 or h > 0.22 or (w * h) > 0.075):
+            pad_enabled = False
         normalized.append({
             'id': str(raw.get('id') or f'anchor_{len(normalized) + 1}'),
             'type': anchor_type,
             'text': text,
             'supporting_text': supporting,
+            'bind_to': bind_to,
+            'evidence_ref': str(raw.get('evidence_ref') or raw.get('evidence_id') or '').strip(),
+            'placement_reason': str(raw.get('placement_reason') or '').strip(),
             'box': (x, y, w, h),
             'align': _coerce_anchor_align(raw.get('align')),
             'font_size': font_size,
             'color': _safe_hex(raw.get('color') or default_color, default_color),
             'supporting_color': _safe_hex(raw.get('supporting_color') or defaults['content_color'], defaults['content_color']),
-            'pad': bool(raw.get('pad', anchor_type != 'title')),
+            'pad': pad_enabled,
             'pad_color': _safe_hex(raw.get('pad_color') or defaults['anchor_pad_color'], defaults['anchor_pad_color']),
-            'pad_opacity': _clamp_float(raw.get('pad_opacity'), 0.70, 0.18, 0.94),
+            'pad_opacity': _clamp_float(raw.get('pad_opacity'), 0.48, 0.16, 0.68),
+            'connector_required': _coerce_bool(raw.get('connector_required'), False),
             'connector': raw.get('connector') if isinstance(raw.get('connector'), dict) else None,
+            'target_point': raw.get('target_point') if isinstance(raw.get('target_point'), dict) else None,
         })
 
     return normalized
@@ -528,6 +550,37 @@ def _normalized_point_to_inches(point):
     except Exception:
         return None
     return x, y
+
+
+def _has_structural_anchors(slide_info):
+    anchors = slide_info.get('text_anchors') or []
+    valid = 0
+    for anchor in anchors:
+        if anchor.get('text') and anchor.get('bind_to'):
+            valid += 1
+    return valid >= 2
+
+
+def _synthesize_anchor_connector(anchor):
+    if not anchor.get('connector_required'):
+        return None
+    x, y, w, h = anchor['box']
+    target = anchor.get('target_point')
+    if isinstance(target, dict):
+        start_x = _clamp_float(target.get('x'), x + w / 2, 0.0, 1.0)
+        start_y = _clamp_float(target.get('y'), y + h / 2, 0.0, 1.0)
+    else:
+        start_x = x - 0.04 if x > 0.52 else x + w + 0.04
+        start_y = y + h / 2
+        start_x = max(0.03, min(0.97, start_x))
+        start_y = max(0.05, min(0.95, start_y))
+
+    end_x = x if start_x < x else x + w
+    end_y = y + h / 2
+    return {
+        'from': {'x': start_x, 'y': start_y},
+        'to': {'x': max(0.02, min(0.98, end_x)), 'y': max(0.02, min(0.98, end_y))},
+    }
 
 
 def _render_connector(slide, connector, color_hex):
@@ -631,7 +684,8 @@ def _render_anchor_slide(slide, slide_info, index, total):
         })
 
     for anchor in anchors:
-        _render_connector(slide, anchor.get('connector'), slide_info['accent_color'])
+        connector = anchor.get('connector') or _synthesize_anchor_connector(anchor)
+        _render_connector(slide, connector, slide_info['accent_color'])
     for anchor in anchors:
         _render_anchor_text(slide, anchor, slide_info)
     _render_footer(slide, slide_info, index, total)
@@ -693,6 +747,7 @@ def _render_slide(slide, prs, slide_info, index, total, hybrid_mode):
     use_anchor_mode = bool(
         has_bg_image
         and slide_info.get('text_anchors')
+        and _has_structural_anchors(slide_info)
         and slide_info.get('render_mode') != 'fallback_layout'
     )
 
