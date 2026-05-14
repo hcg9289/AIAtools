@@ -57,6 +57,10 @@ GF_TEMPLATE_PATH = os.environ.get(
 GF_WITHDRAWAL_TARGET_YEAR = 20
 
 GF_CROP_RULES = {
+    'proposal_summary': {
+        'terms': ('建議書摘要', '保障摘要'),
+        'crop': (0.00, 0.265, 1.00, 0.735),
+    },
     'summary_table': {
         'terms': ('基本計劃', '說明摘要'),
         'crop': (0.00, 0.03, 1.00, 0.78),
@@ -1016,6 +1020,97 @@ def _extract_account_balance_at_year(surrender_text, target_year):
     return _format_money(values[0])
 
 
+def _search_value_rect(page, value, occurrence=0):
+    rects = page.search_for(str(value or ''))
+    if not rects or occurrence >= len(rects):
+        return None
+    return rects[occurrence]
+
+
+def _rect_to_crop_box(page, rect, crop, pad_x=0.012, pad_y=0.006):
+    if rect is None:
+        return None
+    page_rect = page.rect
+    crop_x0 = page_rect.x0 + page_rect.width * crop[0]
+    crop_y0 = page_rect.y0 + page_rect.height * crop[1]
+    crop_w = page_rect.width * (crop[2] - crop[0])
+    crop_h = page_rect.height * (crop[3] - crop[1])
+    x = (rect.x0 - crop_x0) / crop_w
+    y = (rect.y0 - crop_y0) / crop_h
+    w = rect.width / crop_w
+    h = rect.height / crop_h
+    x = max(0.0, x - pad_x)
+    y = max(0.0, y - pad_y)
+    w = min(1.0 - x, w + pad_x * 2)
+    h = min(1.0 - y, h + pad_y * 2)
+    return (x, y, w, h)
+
+
+def _merge_crop_boxes(box_a, box_b, pad_x=0.01, pad_y=0.006):
+    if not box_a or not box_b:
+        return box_a or box_b
+    x0 = max(0.0, min(box_a[0], box_b[0]) - pad_x)
+    y0 = max(0.0, min(box_a[1], box_b[1]) - pad_y)
+    x1 = min(1.0, max(box_a[0] + box_a[2], box_b[0] + box_b[2]) + pad_x)
+    y1 = min(1.0, max(box_a[1] + box_a[3], box_b[1] + box_b[3]) + pad_y)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def _extract_highlight_regions(doc, gf_data):
+    regions = {}
+    summary_page = doc.load_page(gf_data['pages']['summary_table'])
+    summary_crop = GF_CROP_RULES['summary_table']['crop']
+    regions['summary_15y'] = _rect_to_crop_box(
+        summary_page,
+        _search_value_rect(summary_page, gf_data['summary_15y'], 0),
+        summary_crop,
+    )
+    regions['summary_25y'] = _rect_to_crop_box(
+        summary_page,
+        _search_value_rect(summary_page, gf_data['summary_25y'], 0),
+        summary_crop,
+    )
+
+    if gf_data.get('has_withdrawal'):
+        surrender_page = doc.load_page(gf_data['pages']['withdrawal_surrender_table'])
+        surrender_crop = GF_CROP_RULES['withdrawal_surrender_table']['crop']
+        start_offset = 0
+        target_offset = max(
+            0,
+            int(gf_data['withdrawal_target_year']) - int(gf_data['withdrawal_start_year'])
+        )
+        start_box = _rect_to_crop_box(
+            surrender_page,
+            _search_value_rect(surrender_page, gf_data['annual_withdrawal'], start_offset),
+            surrender_crop,
+            pad_x=0.018,
+            pad_y=0.006,
+        )
+        target_withdrawal_box = _rect_to_crop_box(
+            surrender_page,
+            _search_value_rect(surrender_page, gf_data['annual_withdrawal'], target_offset),
+            surrender_crop,
+            pad_x=0.018,
+            pad_y=0.006,
+        )
+        regions['withdrawal_amount_range'] = _merge_crop_boxes(
+            start_box,
+            target_withdrawal_box,
+            pad_x=0.006,
+            pad_y=0.004,
+        )
+        regions['withdrawal_start_amount'] = start_box
+        regions['withdrawal_target_amount'] = target_withdrawal_box
+        regions['account_balance_target'] = _rect_to_crop_box(
+            surrender_page,
+            _search_value_rect(surrender_page, gf_data['account_balance_at_target_year'], 0),
+            surrender_crop,
+            pad_x=0.012,
+            pad_y=0.006,
+        )
+    return {key: value for key, value in regions.items() if value}
+
+
 def _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode):
     if not os.path.exists(pdf_path):
         raise ValueError('找不到上傳的建議書 PDF。')
@@ -1032,6 +1127,8 @@ def _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode):
         for key, rule in GF_CROP_RULES.items():
             pages[key] = _find_page_by_terms(page_texts, rule['terms'])
 
+        if pages['proposal_summary'] is None:
+            raise ValueError('找不到「建議書摘要 / 保障摘要」頁面。')
         if pages['summary_table'] is None:
             raise ValueError('找不到「基本計劃 – 說明摘要」頁面。')
 
@@ -1078,6 +1175,7 @@ def _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode):
                 'account_balance_at_target_year': '',
             })
 
+        data['highlight_regions'] = _extract_highlight_regions(doc, data)
         return data
     finally:
         doc.close()
@@ -1104,7 +1202,7 @@ def _render_pdf_crop(pdf_path, page_index, crop, output_path):
 
 def _render_gf_crops(pdf_path, gf_data, task_id):
     crop_paths = {}
-    for key in ('summary_table', 'withdrawal_surrender_table'):
+    for key in ('proposal_summary', 'summary_table', 'withdrawal_surrender_table'):
         if key == 'withdrawal_surrender_table' and not gf_data.get('has_withdrawal'):
             continue
         page_index = gf_data['pages'].get(key)
@@ -1138,6 +1236,174 @@ def _replace_text_in_slide(slide, replacements):
                 for old, new in replacements.items():
                     if old in run.text:
                         run.text = run.text.replace(old, str(new))
+
+
+def _set_text_shape_text(shape, text):
+    if not getattr(shape, 'has_text_frame', False):
+        return
+    tf = shape.text_frame
+    first_paragraph = tf.paragraphs[0] if tf.paragraphs else None
+    first_run = first_paragraph.runs[0] if first_paragraph and first_paragraph.runs else None
+    align = first_paragraph.alignment if first_paragraph else None
+    font_name = first_run.font.name if first_run else None
+    font_size = first_run.font.size if first_run else None
+    font_bold = first_run.font.bold if first_run else None
+    font_color = None
+    try:
+        font_color = first_run.font.color.rgb if first_run else None
+    except Exception:
+        font_color = None
+
+    tf.clear()
+    lines = str(text).splitlines() or ['']
+    for index, line_text in enumerate(lines):
+        paragraph = tf.paragraphs[0] if index == 0 else tf.add_paragraph()
+        if align is not None:
+            paragraph.alignment = align
+        run = paragraph.add_run()
+        run.text = line_text
+        if font_name:
+            run.font.name = font_name
+            r_pr = run._r.get_or_add_rPr()
+            for tag in ('a:latin', 'a:ea', 'a:cs'):
+                font_elem = r_pr.find(qn(tag))
+                if font_elem is None:
+                    font_elem = OxmlElement(tag)
+                    r_pr.append(font_elem)
+                font_elem.set('typeface', font_name)
+        if font_size:
+            run.font.size = font_size
+        if font_bold is not None:
+            run.font.bold = font_bold
+        if font_color:
+            run.font.color.rgb = font_color
+
+
+def _find_text_shape(slide, contains):
+    for shape in slide.shapes:
+        if getattr(shape, 'has_text_frame', False) and contains in shape.text:
+            return shape
+    return None
+
+
+def _shape_color(shape, attr):
+    try:
+        color = getattr(shape, attr).color.rgb if attr == 'line' else shape.fill.fore_color.rgb
+        return str(color) if color else None
+    except Exception:
+        return None
+
+
+def _remove_gf_highlight_shapes(slide):
+    to_remove = []
+    for shape in slide.shapes:
+        if getattr(shape, 'has_text_frame', False) and shape.text.strip():
+            continue
+        line_color = _shape_color(shape, 'line')
+        fill_color = _shape_color(shape, 'fill')
+        if line_color in {'FF0000', 'F5913F'} or fill_color == 'FF0000':
+            to_remove.append(shape)
+    for shape in to_remove:
+        shape._element.getparent().remove(shape._element)
+
+
+def _crop_box_to_slide_box(picture_shape, crop_box):
+    x, y, w, h = crop_box
+    return (
+        int(picture_shape.left + picture_shape.width * x),
+        int(picture_shape.top + picture_shape.height * y),
+        int(picture_shape.width * w),
+        int(picture_shape.height * h),
+    )
+
+
+def _add_highlight_box(slide, box, color_hex='FF0000', width_pt=1.5):
+    left, top, width, height = box
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
+    shape.fill.background()
+    shape.line.color.rgb = _rgb(color_hex)
+    shape.line.width = Pt(width_pt)
+    return shape
+
+
+def _add_emu_line(slide, start_x, start_y, end_x, end_y, color_hex='F5913F', width_pt=1.4):
+    if end_x <= start_x:
+        return None
+    line = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, start_x, start_y, end_x, end_y)
+    line.line.color.rgb = _rgb(color_hex)
+    line.line.width = Pt(width_pt)
+    return line
+
+
+def _center_shape_on_y(shape, center_y):
+    shape.top = int(center_y - shape.height / 2)
+
+
+def _apply_summary_highlights(slide, picture_shape, gf_data):
+    highlights = gf_data.get('highlight_regions') or {}
+    rows = [
+        ('summary_15y', _find_text_shape(slide, '15年')),
+        ('summary_25y', _find_text_shape(slide, '25年')),
+    ]
+    _remove_gf_highlight_shapes(slide)
+    for key, label_shape in rows:
+        if key not in highlights:
+            continue
+        box = _crop_box_to_slide_box(picture_shape, highlights[key])
+        highlight = _add_highlight_box(slide, box)
+        center_y = highlight.top + highlight.height / 2
+        if label_shape:
+            _center_shape_on_y(label_shape, center_y)
+            start_x = int(label_shape.left + label_shape.width + Inches(1.05))
+            end_x = int(highlight.left - Inches(0.08))
+            _add_emu_line(slide, start_x, int(center_y), end_x, int(center_y))
+
+
+def _apply_withdrawal_highlights(slide, picture_shape, gf_data):
+    highlights = gf_data.get('highlight_regions') or {}
+    _remove_gf_highlight_shapes(slide)
+
+    range_box = highlights.get('withdrawal_amount_range')
+    start_box = highlights.get('withdrawal_start_amount')
+    balance_box = highlights.get('account_balance_target')
+
+    if range_box:
+        amount_highlight = _add_highlight_box(slide, _crop_box_to_slide_box(picture_shape, range_box))
+        start_label = _find_text_shape(slide, '從第')
+        if start_label and start_box:
+            start_value_box = _crop_box_to_slide_box(picture_shape, start_box)
+            _center_shape_on_y(start_label, start_value_box[1] + start_value_box[3] / 2)
+            _add_emu_line(
+                slide,
+                int(start_label.left + start_label.width + Inches(0.18)),
+                int(start_label.top + start_label.height / 2),
+                int(amount_highlight.left - Inches(0.08)),
+                int(start_value_box[1] + start_value_box[3] / 2),
+            )
+
+    if balance_box:
+        balance_highlight = _add_highlight_box(slide, _crop_box_to_slide_box(picture_shape, balance_box))
+        center_y = balance_highlight.top + balance_highlight.height / 2
+        total_label = _find_text_shape(slide, '到第')
+        right_label = _find_text_shape(slide, '戶口餘額$')
+        if total_label:
+            _center_shape_on_y(total_label, center_y)
+            _add_emu_line(
+                slide,
+                int(total_label.left + total_label.width + Inches(0.15)),
+                int(center_y),
+                int(balance_highlight.left - Inches(0.08)),
+                int(center_y),
+            )
+        if right_label:
+            _center_shape_on_y(right_label, center_y)
+            _add_emu_line(
+                slide,
+                int(balance_highlight.left + balance_highlight.width + Inches(0.08)),
+                int(center_y),
+                int(right_label.left - Inches(0.12)),
+                int(center_y),
+            )
 
 
 def _find_largest_picture(slide):
@@ -1176,23 +1442,45 @@ def _finalize_gf_pptx(gf_data, crop_paths, output_path):
         'Prepared by Henry Chu': f"Prepared by {gf_data['agent_name']}",
     })
 
+    slide_8 = _slide_at(prs, 8)
+    _replace_picture_keep_z(slide_8, _find_largest_picture(slide_8), crop_paths['proposal_summary'])
+
     slide_9 = _slide_at(prs, 9)
-    _replace_picture_keep_z(slide_9, _find_largest_picture(slide_9), crop_paths['summary_table'])
-    _replace_text_in_slide(slide_9, {
-        '81%': f"{gf_data['growth_15y']}%",
-        '301%': f"{gf_data['growth_25y']}%",
-    })
+    summary_picture = _replace_picture_keep_z(slide_9, _find_largest_picture(slide_9), crop_paths['summary_table'])
+    label_15 = _find_text_shape(slide_9, '15年')
+    label_25 = _find_text_shape(slide_9, '25年')
+    if label_15:
+        _set_text_shape_text(label_15, f"15年：{gf_data['growth_15y']}% 增長")
+    if label_25:
+        _set_text_shape_text(label_25, f"25年： {gf_data['growth_25y']}% 增長")
+    _apply_summary_highlights(slide_9, summary_picture, gf_data)
 
     if gf_data.get('has_withdrawal'):
         slide_10 = _slide_at(prs, 10)
-        _replace_picture_keep_z(slide_10, _find_largest_picture(slide_10), crop_paths['withdrawal_surrender_table'])
-        _replace_text_in_slide(slide_10, {
-            '第6年': f"第{gf_data['withdrawal_start_year']}年",
-            '$600': f"${gf_data['annual_withdrawal']}",
-            '第12年': f"第{gf_data['withdrawal_target_year']}年",
-            '$9,000': f"${gf_data['total_withdrawal']}",
-            '$11,509': f"${gf_data['account_balance_at_target_year']}",
-        })
+        withdrawal_picture = _replace_picture_keep_z(
+            slide_10,
+            _find_largest_picture(slide_10),
+            crop_paths['withdrawal_surrender_table']
+        )
+        start_label = _find_text_shape(slide_10, '從第')
+        total_label = _find_text_shape(slide_10, '到第')
+        right_balance_label = _find_text_shape(slide_10, '戶口餘額$')
+        if start_label:
+            _set_text_shape_text(
+                start_label,
+                f"從第{gf_data['withdrawal_start_year']}年起\n每年提取${gf_data['annual_withdrawal']}"
+            )
+        if total_label:
+            _set_text_shape_text(
+                total_label,
+                f"到第{gf_data['withdrawal_target_year']}年\n總提取${gf_data['total_withdrawal']}"
+            )
+        if right_balance_label:
+            _set_text_shape_text(
+                right_balance_label,
+                f"戶口餘額${gf_data['account_balance_at_target_year']}"
+            )
+        _apply_withdrawal_highlights(slide_10, withdrawal_picture, gf_data)
     else:
         _delete_slide(prs, 9)
 
@@ -1288,6 +1576,8 @@ def _run_gf_task(task_id, pdf_path, client_name, agent_name, withdrawal_mode):
     try:
         gf_data = _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode)
         crop_paths = _render_gf_crops(pdf_path, gf_data, task_id)
+        if 'proposal_summary' not in crop_paths:
+            raise ValueError('建議書摘要截圖裁切失敗。')
         if 'summary_table' not in crop_paths:
             raise ValueError('基本計劃摘要截圖裁切失敗。')
         if gf_data.get('has_withdrawal') and 'withdrawal_surrender_table' not in crop_paths:
