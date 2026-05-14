@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 COPY templates/ templates/
+COPY assets/ assets/
 
 # Level 3: 建立非 root 專屬用戶 (UID 1008)
 RUN groupadd -g 1008 appgroup && useradd -u 1008 -g appgroup -s /bin/sh -d /app -M appuser \

@@ -3,6 +3,7 @@ import io
 import json
 import base64
 import uuid
+import re
 import threading
 import subprocess
 import requests
@@ -29,6 +30,7 @@ os.makedirs('outputs', exist_ok=True)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 VAULT_AI_URL = os.environ.get('VAULT_AI_URL', 'http://wa-vault-1006:5001')
 PPT_AI_ENDPOINT = f"{VAULT_AI_URL}/api/v1/ai/ppt/1008"
@@ -48,6 +50,26 @@ PPT_FONT_FAMILY = os.environ.get('PPT_FONT_FAMILY', 'Noto Sans CJK TC')
 PPT_FALLBACK_FONT_FAMILY = os.environ.get('PPT_FALLBACK_FONT_FAMILY', 'Microsoft JhengHei')
 SLIDE_WIDTH = Inches(13.333)
 SLIDE_HEIGHT = Inches(7.5)
+GF_TEMPLATE_PATH = os.environ.get(
+    'GF_TEMPLATE_PATH',
+    os.path.join(BASE_DIR, 'assets', 'gf', 'gf_template.pptx')
+)
+GF_WITHDRAWAL_TARGET_YEAR = 20
+
+GF_CROP_RULES = {
+    'summary_table': {
+        'terms': ('基本計劃', '說明摘要'),
+        'crop': (0.00, 0.03, 1.00, 0.78),
+    },
+    'withdrawal_amount_table': {
+        'terms': ('細分之保證及非保證現金提取金額',),
+        'crop': (0.06, 0.18, 0.94, 0.91),
+    },
+    'withdrawal_surrender_table': {
+        'terms': ('現金提取後之退保發還金額',),
+        'crop': (0.06, 0.13, 0.96, 0.92),
+    },
+}
 
 LAYOUT_BOXES = {
     'left': (0.72, 0.70, 5.45, 5.92),
@@ -890,6 +912,293 @@ def _format_vault_error(resp, fallback):
     return text[:240] if text else fallback
 
 
+def _compact_text(text):
+    return re.sub(r'\s+', '', str(text or '').replace('–', '-').replace('—', '-'))
+
+
+def _money_to_float(value):
+    text = re.sub(r'[^\d.]', '', str(value or ''))
+    return float(text) if text else 0.0
+
+
+def _money_to_int(value):
+    return int(round(_money_to_float(value)))
+
+
+def _format_money(value):
+    return f"{_money_to_int(value):,}"
+
+
+def _pdf_page_texts(doc):
+    return [doc.load_page(i).get_text('text') for i in range(len(doc))]
+
+
+def _find_page_by_terms(page_texts, terms):
+    compact_terms = [_compact_text(term) for term in terms]
+    for index, text in enumerate(page_texts):
+        compact = _compact_text(text)
+        if all(term in compact for term in compact_terms):
+            return index
+    return None
+
+
+def _numeric_lines_after_label(text, label, limit=12):
+    lines = [line.strip() for line in str(text or '').splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        if line == str(label):
+            values = []
+            for candidate in lines[index + 1:]:
+                if len(values) >= limit:
+                    break
+                if re.fullmatch(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?', candidate):
+                    values.append(candidate)
+                elif values:
+                    break
+            if values:
+                return values
+    return []
+
+
+def _extract_summary_values(summary_text):
+    row_15 = _numeric_lines_after_label(summary_text, 15, limit=10)
+    row_25 = _numeric_lines_after_label(summary_text, 25, limit=10)
+    if len(row_15) < 6 or len(row_25) < 5:
+        raise ValueError('找不到基本計劃摘要中的 15 年 / 25 年數值。')
+
+    paid_premium_total = row_15[5]
+    summary_15y = row_15[4]
+    summary_25y = row_25[4]
+    paid = max(1.0, _money_to_float(paid_premium_total))
+    growth_15y = int((_money_to_float(summary_15y) - paid) / paid * 100)
+    growth_25y = int((_money_to_float(summary_25y) - paid) / paid * 100)
+
+    return {
+        'paid_premium_total': _format_money(paid_premium_total),
+        'summary_15y': _format_money(summary_15y),
+        'summary_25y': _format_money(summary_25y),
+        'growth_15y': str(growth_15y),
+        'growth_25y': str(growth_25y),
+    }
+
+
+def _extract_annual_premium(first_page_text):
+    match = re.search(r'環宇盈活儲蓄保險計劃（5 年\s*繳費）\s*([\d,]+)', first_page_text, re.S)
+    if match:
+        return _format_money(match.group(1))
+    match = re.search(r'投保時年繳總保費：\s*([\d,]+(?:\.\d+)?)', first_page_text)
+    return _format_money(match.group(1)) if match else ''
+
+
+def _extract_currency(first_page_text):
+    match = re.search(r'保單貨幣：\s*([^\n\r]+)', first_page_text)
+    value = match.group(1).strip() if match else ''
+    if '美元' in value:
+        return 'USD'
+    if '港' in value:
+        return 'HKD'
+    return value or 'USD'
+
+
+def _extract_withdrawal_start_and_amount(withdrawal_text):
+    match = re.search(r'\n([\d,]+)\n(\d{1,2})\n', withdrawal_text)
+    for match in re.finditer(r'\n([\d,]+)\n(\d{1,2})\n', withdrawal_text):
+        amount = _money_to_int(match.group(1))
+        year = int(match.group(2))
+        if amount > 0 and 3 <= year <= GF_WITHDRAWAL_TARGET_YEAR:
+            return str(year), _format_money(amount)
+    return '', ''
+
+
+def _extract_account_balance_at_year(surrender_text, target_year):
+    values = _numeric_lines_after_label(surrender_text, target_year, limit=3)
+    if not values:
+        raise ValueError(f'找不到第 {target_year} 年的提款後戶口餘額。')
+    return _format_money(values[0])
+
+
+def _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode):
+    if not os.path.exists(pdf_path):
+        raise ValueError('找不到上傳的建議書 PDF。')
+
+    doc = fitz.open(pdf_path)
+    try:
+        page_texts = _pdf_page_texts(doc)
+        first_page_text = page_texts[0] if page_texts else ''
+        full_text = '\n'.join(page_texts)
+        if '環宇盈活儲蓄保險計劃' not in full_text:
+            raise ValueError('這份文件不像 GF 建議書：找不到「環宇盈活儲蓄保險計劃」。')
+
+        pages = {}
+        for key, rule in GF_CROP_RULES.items():
+            pages[key] = _find_page_by_terms(page_texts, rule['terms'])
+
+        if pages['summary_table'] is None:
+            raise ValueError('找不到「基本計劃 – 說明摘要」頁面。')
+
+        has_withdrawal = pages['withdrawal_amount_table'] is not None and pages['withdrawal_surrender_table'] is not None
+        if withdrawal_mode == 'yes' and not has_withdrawal:
+            raise ValueError('建議書未包含可用的提款例子。')
+        if withdrawal_mode == 'no':
+            has_withdrawal = False
+
+        summary = _extract_summary_values(page_texts[pages['summary_table']])
+        data = {
+            'client_name': client_name,
+            'agent_name': agent_name,
+            'plan_name': '環宇盈活儲蓄保險計劃（5 年繳費）',
+            'currency': _extract_currency(first_page_text),
+            'annual_premium': _extract_annual_premium(first_page_text),
+            'withdrawal_target_year': str(GF_WITHDRAWAL_TARGET_YEAR),
+            'has_withdrawal': has_withdrawal,
+            'pages': pages,
+            **summary,
+        }
+
+        if has_withdrawal:
+            amount_text = page_texts[pages['withdrawal_amount_table']]
+            surrender_text = page_texts[pages['withdrawal_surrender_table']]
+            start_year, annual_withdrawal = _extract_withdrawal_start_and_amount(amount_text)
+            if not start_year or not annual_withdrawal:
+                raise ValueError('找不到提款例子中的開始年份或每年提款金額。')
+            total_withdrawal = _money_to_int(annual_withdrawal) * (GF_WITHDRAWAL_TARGET_YEAR - int(start_year) + 1)
+            data.update({
+                'withdrawal_start_year': start_year,
+                'annual_withdrawal': annual_withdrawal,
+                'total_withdrawal': _format_money(total_withdrawal),
+                'account_balance_at_target_year': _extract_account_balance_at_year(
+                    surrender_text,
+                    GF_WITHDRAWAL_TARGET_YEAR,
+                ),
+            })
+        else:
+            data.update({
+                'withdrawal_start_year': '',
+                'annual_withdrawal': '',
+                'total_withdrawal': '',
+                'account_balance_at_target_year': '',
+            })
+
+        return data
+    finally:
+        doc.close()
+
+
+def _render_pdf_crop(pdf_path, page_index, crop, output_path):
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc.load_page(page_index)
+        rect = page.rect
+        x0, y0, x1, y1 = crop
+        clip = fitz.Rect(
+            rect.x0 + rect.width * x0,
+            rect.y0 + rect.height * y0,
+            rect.x0 + rect.width * x1,
+            rect.y0 + rect.height * y1,
+        )
+        pix = page.get_pixmap(matrix=fitz.Matrix(2.4, 2.4), clip=clip, alpha=False)
+        pix.save(output_path)
+        return output_path
+    finally:
+        doc.close()
+
+
+def _render_gf_crops(pdf_path, gf_data, task_id):
+    crop_paths = {}
+    for key in ('summary_table', 'withdrawal_surrender_table'):
+        if key == 'withdrawal_surrender_table' and not gf_data.get('has_withdrawal'):
+            continue
+        page_index = gf_data['pages'].get(key)
+        if page_index is None:
+            continue
+        crop_path = os.path.join(app.config['UPLOAD_FOLDER'], f'gf_{task_id}_{key}.png')
+        _render_pdf_crop(pdf_path, page_index, GF_CROP_RULES[key]['crop'], crop_path)
+        crop_paths[key] = crop_path
+    return crop_paths
+
+
+def _slide_at(prs, one_based_index):
+    if len(prs.slides) < one_based_index:
+        raise ValueError(f'GF 模板缺少第 {one_based_index} 頁。')
+    return prs.slides[one_based_index - 1]
+
+
+def _delete_slide(prs, zero_based_index):
+    slide_id_list = prs.slides._sldIdLst
+    slide_id = slide_id_list[zero_based_index]
+    prs.part.drop_rel(slide_id.rId)
+    slide_id_list.remove(slide_id)
+
+
+def _replace_text_in_slide(slide, replacements):
+    for shape in slide.shapes:
+        if not getattr(shape, 'has_text_frame', False):
+            continue
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                for old, new in replacements.items():
+                    if old in run.text:
+                        run.text = run.text.replace(old, str(new))
+
+
+def _find_largest_picture(slide):
+    pictures = [shape for shape in slide.shapes if int(shape.shape_type) == 13]
+    if not pictures:
+        raise ValueError('GF 模板頁面找不到可替換的截圖位置。')
+    return max(pictures, key=lambda shape: shape.width * shape.height)
+
+
+def _replace_picture_keep_z(slide, picture_shape, image_path):
+    sp_tree = slide.shapes._spTree
+    old_element = picture_shape._element
+    old_index = list(sp_tree).index(old_element)
+    new_picture = slide.shapes.add_picture(
+        image_path,
+        picture_shape.left,
+        picture_shape.top,
+        width=picture_shape.width,
+        height=picture_shape.height,
+    )
+    new_element = new_picture._element
+    sp_tree.remove(new_element)
+    sp_tree.insert(old_index, new_element)
+    sp_tree.remove(old_element)
+    return new_picture
+
+
+def _finalize_gf_pptx(gf_data, crop_paths, output_path):
+    if not os.path.exists(GF_TEMPLATE_PATH):
+        raise ValueError('找不到 GF PPT 模板，請確認 assets/gf/gf_template.pptx 已部署。')
+
+    prs = Presentation(GF_TEMPLATE_PATH)
+
+    _replace_text_in_slide(_slide_at(prs, 1), {
+        'Mr. Chung': gf_data['client_name'],
+        'Prepared by Henry Chu': f"Prepared by {gf_data['agent_name']}",
+    })
+
+    slide_9 = _slide_at(prs, 9)
+    _replace_picture_keep_z(slide_9, _find_largest_picture(slide_9), crop_paths['summary_table'])
+    _replace_text_in_slide(slide_9, {
+        '81%': f"{gf_data['growth_15y']}%",
+        '301%': f"{gf_data['growth_25y']}%",
+    })
+
+    if gf_data.get('has_withdrawal'):
+        slide_10 = _slide_at(prs, 10)
+        _replace_picture_keep_z(slide_10, _find_largest_picture(slide_10), crop_paths['withdrawal_surrender_table'])
+        _replace_text_in_slide(slide_10, {
+            '第6年': f"第{gf_data['withdrawal_start_year']}年",
+            '$600': f"${gf_data['annual_withdrawal']}",
+            '第12年': f"第{gf_data['withdrawal_target_year']}年",
+            '$9,000': f"${gf_data['total_withdrawal']}",
+            '$11,509': f"${gf_data['account_balance_at_target_year']}",
+        })
+    else:
+        _delete_slide(prs, 9)
+
+    prs.save(output_path)
+
+
 # ── Background task workers ──────────────────────────────────
 
 def _run_standard_task(task_id, all_base64_images, prompt, language):
@@ -973,6 +1282,48 @@ def _run_hybrid_task(task_id, all_base64_images, prompt, language, aspect_ratio)
             TASKS[task_id]['result'] = {'error': str(e) or 'AI 簡報生成失敗，請稍後重試。'}
 
 
+def _run_gf_task(task_id, pdf_path, client_name, agent_name, withdrawal_mode):
+    """GF template finalizer — runs in background thread and does not call AI."""
+    crop_paths = {}
+    try:
+        gf_data = _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode)
+        crop_paths = _render_gf_crops(pdf_path, gf_data, task_id)
+        if 'summary_table' not in crop_paths:
+            raise ValueError('基本計劃摘要截圖裁切失敗。')
+        if gf_data.get('has_withdrawal') and 'withdrawal_surrender_table' not in crop_paths:
+            raise ValueError('提款後退保發還金額截圖裁切失敗。')
+
+        output_filename = f"gf_finalized_{uuid.uuid4()}.pptx"
+        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+        _finalize_gf_pptx(gf_data, crop_paths, output_path)
+
+        with TASKS_LOCK:
+            TASKS[task_id]['status'] = 'done'
+            TASKS[task_id]['result'] = {
+                'download_url': f'/api/download/{output_filename}',
+                'metadata': {
+                    'plan': 'GF',
+                    'has_withdrawal': gf_data.get('has_withdrawal'),
+                    'growth_15y': gf_data.get('growth_15y'),
+                    'growth_25y': gf_data.get('growth_25y'),
+                    'withdrawal_target_year': gf_data.get('withdrawal_target_year'),
+                }
+            }
+
+    except Exception as e:
+        print(f"[Task {task_id}] GF task error: {e}")
+        with TASKS_LOCK:
+            TASKS[task_id]['status'] = 'error'
+            TASKS[task_id]['result'] = {'error': str(e) or 'GF PPT 生成失敗，請檢查建議書格式。'}
+    finally:
+        for path in [pdf_path, *crop_paths.values()]:
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+
 # ── Routes ────────────────────────────────────────────────────
 
 @app.route('/')
@@ -1001,6 +1352,49 @@ def get_task_status(task_id):
     if task['result']:
         resp.update(task['result'])
     return jsonify(resp)
+
+
+@app.route('/api/gf/generate', methods=['POST'])
+def generate_gf_ppt():
+    """
+    GF Finalizer: fill the fixed GF template from a proposal PDF.
+    """
+    client_name = request.form.get('client_name', '').strip()
+    agent_name = request.form.get('agent_name', '').strip()
+    withdrawal_mode = request.form.get('withdrawal_mode', 'auto').strip().lower()
+    proposal = request.files.get('proposal_pdf') or request.files.get('file')
+
+    if not client_name:
+        return jsonify({'error': '請輸入客人名。'}), 400
+    if not agent_name:
+        return jsonify({'error': '請輸入 Agent 名。'}), 400
+    if withdrawal_mode not in {'auto', 'yes', 'no'}:
+        withdrawal_mode = 'auto'
+    if not proposal or not proposal.filename:
+        return jsonify({'error': '請上傳 GF 建議書 PDF。'}), 400
+    if _filename_extension(proposal.filename) != 'pdf':
+        return jsonify({'error': 'GF Finalizer 只接受 PDF 建議書。'}), 400
+
+    task_id = str(uuid.uuid4())
+    safe_filename = f"gf_{task_id}.pdf"
+    pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
+
+    try:
+        proposal.save(pdf_path)
+    except Exception:
+        return jsonify({'error': 'PDF 上傳失敗，請重新提交。'}), 400
+
+    with TASKS_LOCK:
+        TASKS[task_id] = {'status': 'processing', 'result': None, 'created': datetime.now()}
+
+    t = threading.Thread(
+        target=_run_gf_task,
+        args=(task_id, pdf_path, client_name, agent_name, withdrawal_mode),
+        daemon=True
+    )
+    t.start()
+
+    return jsonify({'task_id': task_id, 'status': 'processing'})
 
 
 @app.route('/api/generate-ppt', methods=['POST'])
