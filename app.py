@@ -71,7 +71,7 @@ GF_CROP_RULES = {
     },
     'withdrawal_surrender_table': {
         'terms': ('現金提取後之退保發還金額',),
-        'crop': (0.06, 0.13, 0.96, 0.92),
+        'crop': (0.035, 0.13, 0.96, 0.92),
     },
 }
 
