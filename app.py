@@ -7,6 +7,7 @@ import re
 import threading
 import subprocess
 import requests
+import time
 import fitz  # PyMuPDF
 from PIL import Image
 from datetime import datetime, timedelta
@@ -40,6 +41,10 @@ SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', str(20 * 60)))
 AUTH_SESSIONS = {}  # {sid: {"uid": str, "expiry": datetime, "ott": str}}
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'ppt', 'pptx'}
 PREVIEW_BOTS = ['WhatsApp', 'facebookexternalhit', 'Twitterbot', 'LinkedInBot', 'Slackbot']
+VAULT_AUTH_TIMEOUT_SECONDS = 5
+VAULT_AUTH_RETRY_ATTEMPTS = 2
+VAULT_AUTH_RETRY_BACKOFF_SECONDS = 0.4
+AUTH_RETRY_PAGE_SECONDS = 2
 
 # Async task store — {task_id: {"status": "processing"|"done"|"error", "result": dict, "created": datetime}}
 TASKS = {}
@@ -106,9 +111,96 @@ def get_client_ip():
     return request.remote_addr or '127.0.0.1'
 
 
+def expects_json_response():
+    accept = request.headers.get('Accept', '').lower()
+    return request.path.startswith('/api/') or request.is_json or 'application/json' in accept or request.method != 'GET'
+
+
+def auth_forbidden_response(message='Unauthorized'):
+    if expects_json_response():
+        return jsonify({'success': False, 'error': message}), 403
+    return (
+        '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>授權失敗</title></head>'
+        '<body style="font-family:sans-serif;text-align:center;padding-top:50px">'
+        f'<h2>授權失敗 (1008)</h2><p>{message}</p><p>請回 WhatsApp 重新取得工具連結。</p>'
+        '</body></html>',
+        403,
+        {'Content-Type': 'text/html; charset=utf-8'}
+    )
+
+
+def auth_retry_response(status_code, message):
+    if expects_json_response():
+        return jsonify({'success': False, 'error': {'code': status_code, 'message': message}}), 503
+    return (
+        '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">'
+        f'<meta http-equiv="refresh" content="{AUTH_RETRY_PAGE_SECONDS}">'
+        '<title>OTT 驗證中</title></head>'
+        '<body style="font-family:sans-serif;text-align:center;padding-top:50px">'
+        '<h2>OTT 驗證暫時未確認 (1008)</h2>'
+        f'<p>{message}</p><p>系統會自動重試，或你可以重新整理同一條連結。</p>'
+        '</body></html>',
+        503,
+        {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Retry-After': str(AUTH_RETRY_PAGE_SECONDS),
+            'Cache-Control': 'no-store, max-age=0',
+        }
+    )
+
+
+def is_vault_timeout_error(exc):
+    return isinstance(exc, requests.exceptions.Timeout) or 'timeout' in str(exc).lower() or 'timed out' in str(exc).lower()
+
+
+def validate_vault_ott(ott):
+    token_prefix = (ott or '')[:8]
+    real_ip = get_client_ip()
+    saw_timeout = False
+
+    for attempt in range(1, VAULT_AUTH_RETRY_ATTEMPTS + 1):
+        try:
+            resp = requests.get(
+                VAULT_AUTH_URL,
+                params={'token': ott},
+                headers={'CF-Connecting-IP': real_ip},
+                timeout=VAULT_AUTH_TIMEOUT_SECONDS
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get('valid'):
+                    app.logger.info('OTT validation result=valid token_prefix=%s attempt=%s real_ip=%s vault_code=%s', token_prefix, attempt, real_ip, resp.status_code)
+                    return 'valid', data, attempt
+                result = 'auth_uncertain' if saw_timeout else 'invalid'
+                app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s vault_code=%s', result, token_prefix, attempt, real_ip, resp.status_code)
+                return result, data, attempt
+            if resp.status_code in (401, 403):
+                result = 'auth_uncertain' if saw_timeout else 'invalid'
+                app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s vault_code=%s', result, token_prefix, attempt, real_ip, resp.status_code)
+                return result, None, attempt
+            if resp.status_code >= 500 and attempt < VAULT_AUTH_RETRY_ATTEMPTS:
+                app.logger.info('OTT validation result=temporary_error_retry token_prefix=%s attempt=%s real_ip=%s vault_code=%s', token_prefix, attempt, real_ip, resp.status_code)
+                time.sleep(VAULT_AUTH_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            app.logger.info('OTT validation result=temporary_error token_prefix=%s attempt=%s real_ip=%s vault_code=%s', token_prefix, attempt, real_ip, resp.status_code)
+            return 'temporary_error', None, attempt
+        except Exception as exc:
+            if is_vault_timeout_error(exc):
+                saw_timeout = True
+                result = 'timeout_retry' if attempt < VAULT_AUTH_RETRY_ATTEMPTS else 'timeout'
+                app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s exception=%s', result, token_prefix, attempt, real_ip, type(exc).__name__)
+                if attempt < VAULT_AUTH_RETRY_ATTEMPTS:
+                    time.sleep(VAULT_AUTH_RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                return 'timeout', None, attempt
+            result = 'auth_uncertain' if saw_timeout else 'temporary_error'
+            app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s exception=%s', result, token_prefix, attempt, real_ip, type(exc).__name__)
+            return result, None, attempt
+    return ('auth_uncertain' if saw_timeout else 'temporary_error'), None, VAULT_AUTH_RETRY_ATTEMPTS
+
+
 @app.before_request
 def verify_ott_access():
-    is_api_request = request.path.startswith('/api/')
     if request.path.startswith('/static') or request.path in ('/health',):
         return
     if request.path.endswith('.css') or request.path.endswith('.js') or request.path.endswith('.png') or request.path.endswith('.jpg') or request.path.endswith('.ico'):
@@ -116,7 +208,7 @@ def verify_ott_access():
 
     ua = request.headers.get('User-Agent', '')
     if any(bot in ua for bot in PREVIEW_BOTS):
-        if is_api_request:
+        if expects_json_response():
             return jsonify({'success': False, 'error': 'Unauthorized'}), 403
         return (
             '<!DOCTYPE html><html><head><meta charset="utf-8">'
@@ -137,15 +229,8 @@ def verify_ott_access():
     ott = request.args.get('ott')
     if ott:
         try:
-            real_ip = get_client_ip()
-            resp = requests.get(
-                VAULT_AUTH_URL,
-                params={'token': ott},
-                headers={'CF-Connecting-IP': real_ip},
-                timeout=5
-            )
-            data = resp.json() if resp.ok else {}
-            if resp.status_code == 200 and data.get('valid'):
+            status, data, attempt = validate_vault_ott(ott)
+            if status == 'valid':
                 new_sid = str(uuid.uuid4())
                 AUTH_SESSIONS[new_sid] = {
                     'uid': data.get('uid'),
@@ -154,12 +239,15 @@ def verify_ott_access():
                 }
                 clean_url = request.path
                 out = redirect(clean_url)
-                out.set_cookie('auth_sid', new_sid, max_age=SESSION_TTL_SECONDS, httponly=True)
+                out.set_cookie('auth_sid', new_sid, max_age=SESSION_TTL_SECONDS, httponly=True, samesite='Lax')
                 return out
+            if status == 'invalid':
+                return auth_forbidden_response('OTT 連結已失效，請從 WhatsApp 重新取得工具連結。')
+            return auth_retry_response(status, '授權驗證服務暫時未確認，請重試同一條連結。')
         except Exception:
-            return jsonify({'success': False, 'error': '安全服務連線異常，請稍後再試'}), 503
+            return auth_retry_response('temporary_error', '授權驗證服務暫時未確認，請稍後重試同一條連結。')
 
-    return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+    return auth_forbidden_response('Unauthorized')
 
 
 # ── AI 背景圖模式映射（1006 新端點用）───────────────────────
