@@ -234,8 +234,9 @@ def verify_ott_access():
                 new_sid = str(uuid.uuid4())
                 AUTH_SESSIONS[new_sid] = {
                     'uid': data.get('uid'),
+                    'tool': data.get('tool'),
+                    'ip': data.get('ip'),
                     'expiry': datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS),
-                    'ott': ott
                 }
                 clean_url = request.path
                 out = redirect(clean_url)
