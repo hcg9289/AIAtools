@@ -156,13 +156,14 @@ def is_vault_timeout_error(exc):
 def validate_vault_ott(ott):
     token_prefix = (ott or '')[:8]
     real_ip = get_client_ip()
+    request_id = uuid.uuid4().hex
     saw_timeout = False
 
     for attempt in range(1, VAULT_AUTH_RETRY_ATTEMPTS + 1):
         try:
             resp = requests.get(
                 VAULT_AUTH_URL,
-                params={'token': ott},
+                params={'token': ott, 'request_id': request_id},
                 headers={'CF-Connecting-IP': real_ip},
                 timeout=VAULT_AUTH_TIMEOUT_SECONDS
             )
