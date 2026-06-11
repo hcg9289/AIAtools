@@ -1,0 +1,15 @@
+.git
+.gitnexus
+.claude
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+.env.*
+uploads/
+outputs/
+venv/
+ENV/
+.vscode/
+.idea/
