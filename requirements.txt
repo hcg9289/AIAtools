@@ -1,7 +1,8 @@
-Flask
-gunicorn
-python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
 pymupdf
-python-pptx
 requests
 Pillow
+playwright

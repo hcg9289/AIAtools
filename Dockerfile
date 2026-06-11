@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice \
+    chromium \
     fonts-noto-cjk \
     fontconfig \
     && fc-cache -f \
@@ -13,8 +13,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
-COPY templates/ templates/
-COPY assets/ assets/
 
 # Level 3: 建立非 root 專屬用戶 (UID 1008)
 RUN groupadd -g 1008 appgroup && useradd -u 1008 -g appgroup -s /bin/sh -d /app -M appuser \
@@ -23,9 +21,9 @@ RUN groupadd -g 1008 appgroup && useradd -u 1008 -g appgroup -s /bin/sh -d /app 
 
 USER appuser
 
-ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
+ENV PORT=5008
+ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 5008
 
-CMD ["gunicorn", "--worker-class", "gthread", "--workers", "1", "--threads", "4", "--timeout", "600", "--bind", "0.0.0.0:5008", "app:app"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5008", "--workers", "1", "--timeout-keep-alive", "60"]
