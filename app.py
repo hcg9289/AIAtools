@@ -1725,6 +1725,16 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/tools/gf')
+def gf_tool():
+    return render_template('gf.html')
+
+
+@app.route('/gf')
+def gf_shortcut():
+    return redirect('/tools/gf')
+
+
 @app.route('/api/ping')
 def ping():
     """Session keepalive — called by frontend every 60s to refresh session TTL."""
