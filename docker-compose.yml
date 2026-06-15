@@ -23,16 +23,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
-      - ../finance_vault/data/1008_ppt_generator:/app/data/1008_ppt_generator:ro
     environment:
       - VAULT_AI_URL=http://wa-vault-1006:5001
-      - VAULT_AUTH_URL=http://wa-vault-1006:5001/api/v1/token/validate
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      - FRONTEND_SLIDES_TEXT_MODEL=${FRONTEND_SLIDES_TEXT_MODEL:-google/gemini-3.1-flash-lite}
-      - FRONTEND_SLIDES_VISION_MODEL=${FRONTEND_SLIDES_VISION_MODEL:-google/gemini-3.1-flash-lite}
-      - APP_INTERNAL_BASE_URL=http://127.0.0.1:5008
-      - CHROME_EXECUTABLE_PATH=/usr/bin/chromium
     restart: unless-stopped
     networks:
       - VPS-net

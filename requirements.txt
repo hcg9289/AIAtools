@@ -1,8 +1,7 @@
-fastapi
-uvicorn[standard]
-python-multipart
-pydantic
+Flask
+gunicorn
+python-dotenv
 pymupdf
+python-pptx
 requests
 Pillow
-playwright
