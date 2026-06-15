@@ -59,6 +59,10 @@ GF_TEMPLATE_PATH = os.environ.get(
     'GF_TEMPLATE_PATH',
     os.path.join(BASE_DIR, 'assets', 'gf', 'gf_template.pptx')
 )
+GF_MODEL_PAGE_PATH = os.environ.get(
+    'GF_MODEL_PAGE_PATH',
+    os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
+)
 GF_WITHDRAWAL_TARGET_YEAR = 20
 
 GF_CROP_RULES = {
@@ -1733,6 +1737,21 @@ def gf_tool():
 @app.route('/gf')
 def gf_shortcut():
     return redirect('/tools/gf')
+
+
+@app.route('/tools/gf-model')
+def gf_model_tool():
+    if not os.path.exists(GF_MODEL_PAGE_PATH):
+        return (
+            '<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">'
+            '<title>GF 提款規律研究</title></head><body>'
+            '<h1>GF 提款規律研究工具未安裝</h1>'
+            '<p>請先把 gf_withdrawal_model.html 放到 AIAtools/research/。</p>'
+            '</body></html>',
+            404,
+            {'Content-Type': 'text/html; charset=utf-8'},
+        )
+    return send_file(GF_MODEL_PAGE_PATH)
 
 
 @app.route('/api/ping')

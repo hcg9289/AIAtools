@@ -15,6 +15,7 @@ ENV/
 # Uploads and outputs (temporary files)
 uploads/
 outputs/
+research/
 
 # IDE
 .vscode/
@@ -28,3 +29,4 @@ Thumbs.db
 
 # Logs
 *.log
+.gitnexus
