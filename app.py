@@ -294,6 +294,8 @@ def pdf_to_base64_images(pdf_path):
 
 def convert_ppt_to_pdf(ppt_path, output_dir):
     try:
+        ppt_path = os.path.abspath(ppt_path)
+        output_dir = os.path.abspath(output_dir)
         subprocess.run(
             ['libreoffice', '--headless', '--convert-to', 'pdf', ppt_path, '--outdir', output_dir],
             check=True, capture_output=True
@@ -1861,7 +1863,16 @@ def generate_ppt_hybrid():
 
 @app.route('/api/download/<filename>')
 def download_file(filename):
+    filename = os.path.basename(filename)
     filepath = os.path.join(app.config['OUTPUT_FOLDER'], filename)
+    if filename.lower().endswith('.pdf') and not os.path.exists(filepath):
+        pptx_filename = filename[:-4] + '.pptx'
+        pptx_path = os.path.join(app.config['OUTPUT_FOLDER'], pptx_filename)
+        if os.path.exists(pptx_path):
+            try:
+                filepath = _convert_pptx_to_pdf_or_raise(pptx_path)
+            except Exception as e:
+                return jsonify({'error': str(e) or 'PDF conversion failed'}), 500
     if os.path.exists(filepath):
         return send_file(filepath, as_attachment=True)
     return jsonify({'error': 'File not found'}), 404
