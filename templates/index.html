@@ -381,7 +381,7 @@
             const init = await resp.json();
             if (!resp.ok) throw new Error(init.error || '無法建立 GF 任務。');
             const result = await pollTask(init.task_id);
-            showResult(result.download_url);
+            showResult(result);
         } catch (error) {
             showError(error.message || 'GF PPT 生成失敗。');
         } finally {
@@ -400,8 +400,13 @@
         errorBox.style.display = 'none';
     }
 
-    function showResult(url) {
-        resultBox.innerHTML = `GF PPT 已生成。<a href="${url}" target="_blank">下載 .pptx</a>`;
+    function showResult(result) {
+        const pptxUrl = result.pptx_download_url || result.download_url;
+        const pdfUrl = result.pdf_download_url;
+        const links = [];
+        if (pptxUrl) links.push(`<a href="${pptxUrl}" target="_blank">下載 PPTX</a>`);
+        if (pdfUrl) links.push(`<a href="${pdfUrl}" target="_blank">下載 PDF</a>`);
+        resultBox.innerHTML = `GF 文件已生成。${links.join('　')}`;
         resultBox.style.display = 'block';
     }
 

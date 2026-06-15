@@ -306,6 +306,14 @@ def convert_ppt_to_pdf(ppt_path, output_dir):
         return None
 
 
+def _convert_pptx_to_pdf_or_raise(pptx_path):
+    output_dir = os.path.dirname(pptx_path)
+    pdf_path = convert_ppt_to_pdf(pptx_path, output_dir)
+    if not pdf_path or not os.path.exists(pdf_path):
+        raise ValueError('PPT 已生成，但 PDF 轉換失敗。請稍後重試或下載 PPTX。')
+    return pdf_path
+
+
 def process_file_to_images(filepath):
     ext = _filename_extension(filepath)
     if ext not in ALLOWED_EXTENSIONS:
@@ -1676,11 +1684,15 @@ def _run_gf_task(task_id, pdf_path, client_name, agent_name, withdrawal_mode):
         output_filename = f"gf_finalized_{uuid.uuid4()}.pptx"
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
         _finalize_gf_pptx(gf_data, crop_paths, output_path)
+        pdf_path = _convert_pptx_to_pdf_or_raise(output_path)
+        pdf_filename = os.path.basename(pdf_path)
 
         with TASKS_LOCK:
             TASKS[task_id]['status'] = 'done'
             TASKS[task_id]['result'] = {
                 'download_url': f'/api/download/{output_filename}',
+                'pptx_download_url': f'/api/download/{output_filename}',
+                'pdf_download_url': f'/api/download/{pdf_filename}',
                 'metadata': {
                     'plan': 'GF',
                     'has_withdrawal': gf_data.get('has_withdrawal'),
