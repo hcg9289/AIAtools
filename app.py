@@ -1107,13 +1107,21 @@ def _extract_currency(first_page_text):
     return value or 'USD'
 
 
-def _extract_withdrawal_start_and_amount(withdrawal_text):
-    match = re.search(r'\n([\d,]+)\n(\d{1,2})\n', withdrawal_text)
+def _extract_withdrawal_year_amounts(withdrawal_text):
+    year_amounts = []
     for match in re.finditer(r'\n([\d,]+)\n(\d{1,2})\n', withdrawal_text):
         amount = _money_to_int(match.group(1))
         year = int(match.group(2))
-        if amount > 0 and 3 <= year <= GF_WITHDRAWAL_TARGET_YEAR:
-            return str(year), _format_money(amount)
+        if amount > 0 and 2 <= year <= GF_WITHDRAWAL_TARGET_YEAR:
+            year_amounts.append((year, amount))
+    return year_amounts
+
+
+def _extract_withdrawal_start_and_amount(withdrawal_text):
+    year_amounts = _extract_withdrawal_year_amounts(withdrawal_text)
+    if year_amounts:
+        year, amount = year_amounts[0]
+        return str(year), _format_money(amount)
     return '', ''
 
 
@@ -1261,7 +1269,8 @@ def _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode):
             start_year, annual_withdrawal = _extract_withdrawal_start_and_amount(amount_text)
             if not start_year or not annual_withdrawal:
                 raise ValueError('找不到提款例子中的開始年份或每年提款金額。')
-            total_withdrawal = _money_to_int(annual_withdrawal) * (GF_WITHDRAWAL_TARGET_YEAR - int(start_year) + 1)
+            withdrawal_year_amounts = _extract_withdrawal_year_amounts(amount_text)
+            total_withdrawal = sum(amount for _, amount in withdrawal_year_amounts)
             data.update({
                 'withdrawal_start_year': start_year,
                 'annual_withdrawal': annual_withdrawal,
@@ -1390,6 +1399,29 @@ def _find_text_shape(slide, contains):
     return None
 
 
+def _find_text_shape_with_all(slide, terms):
+    for shape in slide.shapes:
+        if not getattr(shape, 'has_text_frame', False):
+            continue
+        text = shape.text
+        if all(term in text for term in terms):
+            return shape
+    return None
+
+
+def _remove_text_shapes(slide, exact_texts):
+    targets = {' '.join(text.split()) for text in exact_texts}
+    to_remove = []
+    for shape in slide.shapes:
+        if not getattr(shape, 'has_text_frame', False):
+            continue
+        normalized = ' '.join(shape.text.split())
+        if normalized in targets:
+            to_remove.append(shape)
+    for shape in to_remove:
+        shape._element.getparent().remove(shape._element)
+
+
 def _shape_color(shape, attr):
     try:
         color = getattr(shape, attr).color.rgb if attr == 'line' else shape.fill.fore_color.rgb
@@ -1430,13 +1462,38 @@ def _add_highlight_box(slide, box, color_hex='FF0000', width_pt=1.5):
     return shape
 
 
-def _add_emu_line(slide, start_x, start_y, end_x, end_y, color_hex='F5913F', width_pt=1.4):
-    if end_x <= start_x:
+def _add_emu_connector(slide, start_x, start_y, end_x, end_y, color_hex='F5913F', width_pt=1.4):
+    if start_x == end_x and start_y == end_y:
         return None
     line = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, start_x, start_y, end_x, end_y)
     line.line.color.rgb = _rgb(color_hex)
     line.line.width = Pt(width_pt)
     return line
+
+
+def _add_emu_line(slide, start_x, start_y, end_x, end_y, color_hex='F5913F', width_pt=1.4):
+    if end_x <= start_x:
+        return None
+    return _add_emu_connector(slide, start_x, start_y, end_x, end_y, color_hex, width_pt)
+
+
+def _add_emu_elbow_line(slide, start_x, start_y, end_x, end_y, route_y, color_hex='F5913F', width_pt=1.4):
+    if end_x <= start_x:
+        return None
+    route_y = int(route_y)
+    if abs(route_y - start_y) < 2 and abs(route_y - end_y) < 2:
+        return _add_emu_line(slide, start_x, start_y, end_x, end_y, color_hex, width_pt)
+
+    created = []
+    for sx, sy, ex, ey in (
+        (start_x, start_y, start_x, route_y),
+        (start_x, route_y, end_x, route_y),
+        (end_x, route_y, end_x, end_y),
+    ):
+        line = _add_emu_connector(slide, int(sx), int(sy), int(ex), int(ey), color_hex, width_pt)
+        if line:
+            created.append(line)
+    return created[-1] if created else None
 
 
 def _center_shape_on_y(shape, center_y):
@@ -1476,37 +1533,66 @@ def _apply_withdrawal_highlights(slide, picture_shape, gf_data):
         start_label = _find_text_shape(slide, '從第')
         if start_label and start_box:
             start_value_box = _crop_box_to_slide_box(picture_shape, start_box)
-            _center_shape_on_y(start_label, start_value_box[1] + start_value_box[3] / 2)
+            start_center_y = start_value_box[1] + start_value_box[3] / 2
+            _center_shape_on_y(start_label, start_center_y)
+            title_shape = _find_text_shape_with_all(slide, ('每年提取', '戶口價值例子'))
+            if title_shape:
+                min_top = int(title_shape.top + title_shape.height + Inches(0.08))
+                if start_label.top < min_top:
+                    start_label.top = min_top
             _add_emu_line(
                 slide,
                 int(start_label.left + start_label.width + Inches(0.18)),
                 int(start_label.top + start_label.height / 2),
                 int(amount_highlight.left - Inches(0.08)),
-                int(start_value_box[1] + start_value_box[3] / 2),
+                int(start_center_y),
             )
 
     if balance_box:
         balance_highlight = _add_highlight_box(slide, _crop_box_to_slide_box(picture_shape, balance_box))
         center_y = balance_highlight.top + balance_highlight.height / 2
+        box_bottom_y = int(balance_highlight.top + balance_highlight.height)
+        bottom_anchor_y = int(box_bottom_y + Inches(0.02))
+        try:
+            target_year = int(gf_data.get('withdrawal_target_year') or GF_WITHDRAWAL_TARGET_YEAR)
+        except (TypeError, ValueError):
+            target_year = GF_WITHDRAWAL_TARGET_YEAR
+        try:
+            start_year = int(gf_data.get('withdrawal_start_year') or target_year)
+        except (TypeError, ValueError):
+            start_year = target_year
+        row_height = balance_highlight.height / 2
+        if range_box:
+            range_slide_box = _crop_box_to_slide_box(picture_shape, range_box)
+            highlighted_rows = max(1, target_year - start_year + 1)
+            row_height = max(1, range_slide_box[3] / highlighted_rows)
+        rows_after_target = max(0, 30 - target_year)
+        safe_line_y = int(box_bottom_y + row_height * (rows_after_target + 0.55))
+        safe_line_y = max(safe_line_y, int(box_bottom_y + Inches(0.16)))
+        picture_bottom_y = int(picture_shape.top + picture_shape.height - Inches(0.05))
+        if safe_line_y > picture_bottom_y:
+            safe_line_y = max(int(box_bottom_y + Inches(0.16)), picture_bottom_y)
         total_label = _find_text_shape(slide, '到第')
         right_label = _find_text_shape(slide, '戶口餘額$')
         if total_label:
             _center_shape_on_y(total_label, center_y)
-            _add_emu_line(
+            _add_emu_elbow_line(
                 slide,
                 int(total_label.left + total_label.width + Inches(0.15)),
                 int(center_y),
                 int(balance_highlight.left - Inches(0.08)),
-                int(center_y),
+                bottom_anchor_y,
+                safe_line_y,
             )
         if right_label:
             _center_shape_on_y(right_label, center_y)
-            _add_emu_line(
+            _add_emu_elbow_line(
                 slide,
                 int(balance_highlight.left + balance_highlight.width + Inches(0.08)),
-                int(center_y),
+                bottom_anchor_y,
                 int(right_label.left - Inches(0.12)),
                 int(center_y),
+                safe_line_y,
             )
 
 
@@ -1550,6 +1636,7 @@ def _finalize_gf_pptx(gf_data, crop_paths, output_path):
     _replace_picture_keep_z(slide_8, _find_largest_picture(slide_8), crop_paths['proposal_summary'])
 
     slide_9 = _slide_at(prs, 9)
+    _remove_text_shapes(slide_9, {'一次過提取 戶口價值例子'})
     summary_picture = _replace_picture_keep_z(slide_9, _find_largest_picture(slide_9), crop_paths['summary_table'])
     label_15 = _find_text_shape(slide_9, '15年')
     label_25 = _find_text_shape(slide_9, '25年')
