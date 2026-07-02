@@ -10,6 +10,10 @@ import requests
 import time
 import fitz  # PyMuPDF
 from PIL import Image
+try:
+    import pytesseract
+except ImportError:  # pragma: no cover - runtime dependency is installed in Docker
+    pytesseract = None
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify, send_file, redirect
 from werkzeug.utils import secure_filename
@@ -64,6 +68,9 @@ GF_MODEL_PAGE_PATH = os.environ.get(
     os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
 )
 GF_WITHDRAWAL_TARGET_YEAR = 20
+GF_OCR_ZOOM = float(os.environ.get('GF_OCR_ZOOM', '4.0'))
+GF_OCR_LANG = os.environ.get('GF_OCR_LANG', 'eng')
+GF_OCR_MIN_CONFIDENCE = float(os.environ.get('GF_OCR_MIN_CONFIDENCE', '45'))
 
 GF_CROP_RULES = {
     'proposal_summary': {
@@ -1067,6 +1074,344 @@ def _numeric_lines_after_label(text, label, limit=12):
     return []
 
 
+def _median_number(values, fallback=0.0):
+    cleaned = sorted(float(value) for value in values if value is not None)
+    if not cleaned:
+        return fallback
+    middle = len(cleaned) // 2
+    if len(cleaned) % 2:
+        return cleaned[middle]
+    return (cleaned[middle - 1] + cleaned[middle]) / 2
+
+
+def _ocr_numeric_value(text):
+    normalized = str(text or '').strip().translate(str.maketrans({
+        'O': '0',
+        'o': '0',
+        'I': '1',
+        'l': '1',
+        '|': '1',
+    }))
+    normalized = re.sub(r'[^\d,]', '', normalized)
+    if not normalized or not re.fullmatch(r'\d{1,3}(?:,\d{3})*|\d+', normalized):
+        return None
+    return int(normalized.replace(',', ''))
+
+
+def _parse_ocr_confidence(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return -1.0
+
+
+def _merge_rects(rects):
+    rects = [rect for rect in rects if rect is not None]
+    if not rects:
+        return None
+    merged = fitz.Rect(rects[0])
+    for rect in rects[1:]:
+        merged.include_rect(rect)
+    return merged
+
+
+def _ocr_page_numeric_words(page):
+    if pytesseract is None:
+        raise ValueError('OCR 套件未安裝，無法安全定位 GF 提款表格。')
+
+    pix = page.get_pixmap(matrix=fitz.Matrix(GF_OCR_ZOOM, GF_OCR_ZOOM), alpha=False)
+    image = Image.open(io.BytesIO(pix.tobytes('png')))
+    data = pytesseract.image_to_data(
+        image,
+        lang=GF_OCR_LANG,
+        config='--psm 6',
+        output_type=pytesseract.Output.DICT,
+    )
+    scale_x = page.rect.width / max(1, image.width)
+    scale_y = page.rect.height / max(1, image.height)
+    words = []
+    for index, raw_text in enumerate(data.get('text', [])):
+        text = str(raw_text or '').strip()
+        value = _ocr_numeric_value(text)
+        if value is None:
+            continue
+        confidence = _parse_ocr_confidence(data.get('conf', [])[index])
+        if 0 <= confidence < GF_OCR_MIN_CONFIDENCE:
+            continue
+        x0 = page.rect.x0 + int(data['left'][index]) * scale_x
+        y0 = page.rect.y0 + int(data['top'][index]) * scale_y
+        x1 = x0 + int(data['width'][index]) * scale_x
+        y1 = y0 + int(data['height'][index]) * scale_y
+        words.append({
+            'text': text,
+            'value': value,
+            'confidence': confidence,
+            'rect': fitz.Rect(x0, y0, x1, y1),
+        })
+    return words
+
+
+def _cluster_ocr_words_by_y(words, tolerance=4.0):
+    clusters = []
+    for word in sorted(words, key=lambda item: ((item['rect'].y0 + item['rect'].y1) / 2, item['rect'].x0)):
+        center_y = (word['rect'].y0 + word['rect'].y1) / 2
+        for cluster in clusters:
+            if abs(cluster['center_y'] - center_y) <= tolerance:
+                cluster['words'].append(word)
+                cluster['center_y'] = _median_number(
+                    [(w['rect'].y0 + w['rect'].y1) / 2 for w in cluster['words']],
+                    center_y,
+                )
+                break
+        else:
+            clusters.append({'center_y': center_y, 'words': [word]})
+    return clusters
+
+
+def _cluster_ocr_words_by_x(words, tolerance=10.0):
+    clusters = []
+    for word in sorted(words, key=lambda item: (item['rect'].x0 + item['rect'].x1) / 2):
+        center_x = (word['rect'].x0 + word['rect'].x1) / 2
+        for cluster in clusters:
+            if abs(cluster['center_x'] - center_x) <= tolerance:
+                cluster['words'].append(word)
+                cluster['center_x'] = _median_number(
+                    [(w['rect'].x0 + w['rect'].x1) / 2 for w in cluster['words']],
+                    center_x,
+                )
+                break
+        else:
+            clusters.append({'center_x': center_x, 'words': [word]})
+    return clusters
+
+
+def _longest_consecutive_year_run(year_rows):
+    years = sorted(year_rows)
+    longest = current = 0
+    previous = None
+    for year in years:
+        if previous is None or year == previous + 1:
+            current += 1
+        else:
+            longest = max(longest, current)
+            current = 1
+        previous = year
+    return max(longest, current)
+
+
+def _build_year_rows_from_ocr_words(words):
+    by_year = {}
+    for word in words:
+        by_year.setdefault(word['value'], []).append(word)
+
+    year_rows = {}
+    for year, year_words in by_year.items():
+        clusters = _cluster_ocr_words_by_y(year_words)
+        if not clusters:
+            continue
+        best = max(
+            clusters,
+            key=lambda cluster: (
+                len(cluster['words']),
+                _median_number([w['confidence'] for w in cluster['words']], -1),
+            ),
+        )
+        year_rows[year] = {
+            'center_y': best['center_y'],
+            'rect': _merge_rects([word['rect'] for word in best['words']]),
+            'count': len(best['words']),
+        }
+    return year_rows
+
+
+def _ocr_year_row_map(page, max_year=45):
+    left_limit = page.rect.width * 0.18
+    year_words = [
+        word for word in _ocr_page_numeric_words(page)
+        if 1 <= word['value'] <= max_year and word['rect'].x0 <= left_limit
+    ]
+    column_candidates = []
+    for cluster in _cluster_ocr_words_by_x(year_words):
+        rows = _build_year_rows_from_ocr_words(cluster['words'])
+        if not rows:
+            continue
+        step = _ocr_row_step(rows) if len(rows) > 1 else 0
+        column_candidates.append({
+            'center_x': cluster['center_x'],
+            'rows': rows,
+            'run': _longest_consecutive_year_run(rows),
+            'count': len(rows),
+            'step': step,
+        })
+    if not column_candidates:
+        raise ValueError('OCR 未能定位 GF 提款表格年份欄。')
+
+    best_column = max(
+        column_candidates,
+        key=lambda item: (
+            item['run'],
+            item['count'],
+            1 if 8.0 <= item['step'] <= 16.0 else 0,
+            item['center_x'],
+        ),
+    )
+    year_rows = best_column['rows']
+    if len(year_rows) < 10:
+        raise ValueError('OCR 未能可靠定位 GF 提款表格年份列。')
+    return year_rows
+
+
+def _ocr_row_step(year_rows):
+    ordered = sorted((year, row['center_y']) for year, row in year_rows.items())
+    diffs = [
+        y2 - y1
+        for (_, y1), (_, y2) in zip(ordered, ordered[1:])
+        if 5.0 <= y2 - y1 <= 30.0
+    ]
+    return _median_number(diffs, fallback=12.0)
+
+
+def _ocr_row_bounds(year_rows, year):
+    if year not in year_rows:
+        raise ValueError(f'OCR 找不到第 {year} 年在 GF 提款表格的位置。')
+    center_y = year_rows[year]['center_y']
+    step = _ocr_row_step(year_rows)
+    previous_rows = [row['center_y'] for row_year, row in year_rows.items() if row_year < year]
+    next_rows = [row['center_y'] for row_year, row in year_rows.items() if row_year > year]
+    top = (max(previous_rows) + center_y) / 2 if previous_rows else center_y - step / 2
+    bottom = (min(next_rows) + center_y) / 2 if next_rows else center_y + step / 2
+    padding = max(1.0, min(3.0, step * 0.16))
+    return top - padding, bottom + padding
+
+
+def _is_pdf_numeric_word(text):
+    normalized = re.sub(r'[^\d,.]', '', str(text or ''))
+    return bool(re.fullmatch(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?', normalized))
+
+
+def _pdf_numeric_cells_for_ocr_row(page, year_rows, year):
+    top, bottom = _ocr_row_bounds(year_rows, year)
+    cells = []
+    for word in page.get_text('words'):
+        x0, y0, x1, y1, text = word[:5]
+        center_y = (y0 + y1) / 2
+        if center_y < top or center_y > bottom or not _is_pdf_numeric_word(text):
+            continue
+        cells.append({
+            'text': str(text),
+            'value': _money_to_int(text),
+            'rect': fitz.Rect(x0, y0, x1, y1),
+        })
+    cells.sort(key=lambda cell: (cell['rect'].x0, cell['rect'].y0))
+    left_limit = page.rect.width * 0.18
+    if not any(cell['value'] == year and cell['rect'].x0 <= left_limit for cell in cells):
+        raise ValueError(f'PDF 抽取結果未能對上 OCR 定位的第 {year} 年列。')
+    return cells
+
+
+def _pdf_value_cells(cells, page):
+    left_limit = page.rect.width * 0.18
+    return [cell for cell in cells if cell['rect'].x0 > left_limit]
+
+
+def _rightmost_pdf_value_cell(cells, page, label):
+    value_cells = _pdf_value_cells(cells, page)
+    if not value_cells:
+        raise ValueError(f'找不到 {label} 的 PDF 金額欄位。')
+    return value_cells[-1]
+
+
+def _find_pdf_amount_cell(cells, page, amount, label):
+    matches = [
+        cell for cell in _pdf_value_cells(cells, page)
+        if cell['value'] == amount
+    ]
+    if not matches:
+        raise ValueError(f'PDF 第 {label} 列找不到每年提款金額 {_format_money(amount)}。')
+    return matches[0]
+
+
+def _extract_gf_withdrawal_from_ocr_pdf(doc, pages):
+    target_year = GF_WITHDRAWAL_TARGET_YEAR
+    amount_page = doc.load_page(pages['withdrawal_amount_table'])
+    surrender_page = doc.load_page(pages['withdrawal_surrender_table'])
+    amount_year_rows = _ocr_year_row_map(amount_page)
+    surrender_year_rows = _ocr_year_row_map(surrender_page)
+
+    yearly_withdrawals = {}
+    for year in range(2, target_year + 1):
+        row_cells = _pdf_numeric_cells_for_ocr_row(amount_page, amount_year_rows, year)
+        withdrawal_cell = _rightmost_pdf_value_cell(row_cells, amount_page, f'第 {year} 年提款金額')
+        yearly_withdrawals[year] = withdrawal_cell['value']
+
+    positive_years = [year for year, amount in yearly_withdrawals.items() if amount > 0]
+    if not positive_years:
+        raise ValueError('PDF/OCR 驗證後找不到提款開始年份。')
+
+    start_year = positive_years[0]
+    annual_withdrawal = yearly_withdrawals[start_year]
+    for year in range(start_year, target_year + 1):
+        amount = yearly_withdrawals.get(year)
+        if amount != annual_withdrawal:
+            raise ValueError(
+                f'第 {start_year} 至第 {target_year} 年提款金額不一致，'
+                f'第 {year} 年是 {_format_money(amount or 0)}。'
+            )
+
+    total_withdrawal = sum(yearly_withdrawals[year] for year in range(start_year, target_year + 1))
+
+    start_surrender_cells = _pdf_numeric_cells_for_ocr_row(surrender_page, surrender_year_rows, start_year)
+    target_surrender_cells = _pdf_numeric_cells_for_ocr_row(surrender_page, surrender_year_rows, target_year)
+    start_amount_cell = _find_pdf_amount_cell(start_surrender_cells, surrender_page, annual_withdrawal, start_year)
+    target_amount_cell = _find_pdf_amount_cell(target_surrender_cells, surrender_page, annual_withdrawal, target_year)
+    balance_cell = _rightmost_pdf_value_cell(target_surrender_cells, surrender_page, f'第 {target_year} 年戶口餘額')
+    account_balance = balance_cell['value']
+    if account_balance <= annual_withdrawal:
+        raise ValueError(
+            f'第 {target_year} 年戶口餘額 {_format_money(account_balance)} 異常，'
+            '已停止生成 GF 簡報。'
+        )
+
+    surrender_crop = GF_CROP_RULES['withdrawal_surrender_table']['crop']
+    start_box = _rect_to_crop_box(
+        surrender_page,
+        start_amount_cell['rect'],
+        surrender_crop,
+        pad_x=0.018,
+        pad_y=0.006,
+    )
+    target_box = _rect_to_crop_box(
+        surrender_page,
+        target_amount_cell['rect'],
+        surrender_crop,
+        pad_x=0.018,
+        pad_y=0.006,
+    )
+    balance_box = _rect_to_crop_box(
+        surrender_page,
+        balance_cell['rect'],
+        surrender_crop,
+        pad_x=0.012,
+        pad_y=0.006,
+    )
+    highlight_regions = {
+        'withdrawal_start_amount': start_box,
+        'withdrawal_target_amount': target_box,
+        'withdrawal_amount_range': _merge_crop_boxes(start_box, target_box, pad_x=0.006, pad_y=0.004),
+        'account_balance_target': balance_box,
+    }
+
+    return {
+        'withdrawal_start_year': str(start_year),
+        'annual_withdrawal': _format_money(annual_withdrawal),
+        'total_withdrawal': _format_money(total_withdrawal),
+        'account_balance_at_target_year': _format_money(account_balance),
+        '_withdrawal_highlight_regions': {
+            key: value for key, value in highlight_regions.items() if value
+        },
+    }
+
+
 def _extract_summary_values(summary_text):
     row_15 = _numeric_lines_after_label(summary_text, 15, limit=10)
     row_25 = _numeric_lines_after_label(summary_text, 25, limit=10)
@@ -1184,6 +1529,11 @@ def _extract_highlight_regions(doc, gf_data):
     )
 
     if gf_data.get('has_withdrawal'):
+        verified_regions = gf_data.get('_withdrawal_highlight_regions') or {}
+        if verified_regions:
+            regions.update(verified_regions)
+            return {key: value for key, value in regions.items() if value}
+
         surrender_page = doc.load_page(gf_data['pages']['withdrawal_surrender_table'])
         surrender_crop = GF_CROP_RULES['withdrawal_surrender_table']['crop']
         start_offset = 0
@@ -1264,22 +1614,7 @@ def _parse_gf_proposal(pdf_path, client_name, agent_name, withdrawal_mode):
         }
 
         if has_withdrawal:
-            amount_text = page_texts[pages['withdrawal_amount_table']]
-            surrender_text = page_texts[pages['withdrawal_surrender_table']]
-            start_year, annual_withdrawal = _extract_withdrawal_start_and_amount(amount_text)
-            if not start_year or not annual_withdrawal:
-                raise ValueError('找不到提款例子中的開始年份或每年提款金額。')
-            withdrawal_year_amounts = _extract_withdrawal_year_amounts(amount_text)
-            total_withdrawal = sum(amount for _, amount in withdrawal_year_amounts)
-            data.update({
-                'withdrawal_start_year': start_year,
-                'annual_withdrawal': annual_withdrawal,
-                'total_withdrawal': _format_money(total_withdrawal),
-                'account_balance_at_target_year': _extract_account_balance_at_year(
-                    surrender_text,
-                    GF_WITHDRAWAL_TARGET_YEAR,
-                ),
-            })
+            data.update(_extract_gf_withdrawal_from_ocr_pdf(doc, pages))
         else:
             data.update({
                 'withdrawal_start_year': '',

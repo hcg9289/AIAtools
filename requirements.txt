@@ -5,3 +5,4 @@ pymupdf
 python-pptx
 requests
 Pillow
+pytesseract

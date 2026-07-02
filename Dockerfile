@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     fonts-noto-cjk \
     fontconfig \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-chi-tra \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
