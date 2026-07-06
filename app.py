@@ -8,6 +8,7 @@ import threading
 import subprocess
 import requests
 import time
+import zipfile
 import fitz  # PyMuPDF
 from PIL import Image
 try:
@@ -16,6 +17,7 @@ except ImportError:  # pragma: no cover - runtime dependency is installed in Doc
     pytesseract = None
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify, send_file, redirect
+from xml.sax.saxutils import escape
 from werkzeug.utils import secure_filename
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -279,6 +281,102 @@ def _filename_extension(filename):
 
 def allowed_file(filename):
     return _filename_extension(filename) in ALLOWED_EXTENSIONS
+
+
+def _normalize_hk_mobile_number(value):
+    digits = re.sub(r'\D+', '', str(value or ''))
+    if digits.startswith('852') and len(digits) == 11:
+        digits = digits[3:]
+    if re.fullmatch(r'[569]\d{7}', digits):
+        return digits
+    return None
+
+
+def _cold_call_xlsx(numbers):
+    created_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    rows = ['<row r="1"><c r="A1" t="inlineStr"><is><t>Phone Number</t></is></c></row>']
+    for index, number in enumerate(numbers, start=2):
+        escaped_number = escape(number)
+        rows.append(
+            f'<row r="{index}"><c r="A{index}" t="inlineStr"><is><t>{escaped_number}</t></is></c></row>'
+        )
+
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<cols><col min="1" max="1" width="18" customWidth="1"/></cols>'
+        '<sheetData>'
+        + ''.join(rows) +
+        '</sheetData></worksheet>'
+    )
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as workbook:
+        workbook.writestr('[Content_Types].xml', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+            '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+            '</Types>'
+        ))
+        workbook.writestr('_rels/.rels', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+            '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+            '</Relationships>'
+        ))
+        workbook.writestr('docProps/app.xml', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+            'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+            '<Application>AIAtools</Application></Properties>'
+        ))
+        workbook.writestr('docProps/core.xml', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:dcterms="http://purl.org/dc/terms/" '
+            'xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+            '<dc:title>Cold call list</dc:title><dc:creator>AIAtools</dc:creator>'
+            f'<dcterms:created xsi:type="dcterms:W3CDTF">{created_at}</dcterms:created>'
+            f'<dcterms:modified xsi:type="dcterms:W3CDTF">{created_at}</dcterms:modified>'
+            '</cp:coreProperties>'
+        ))
+        workbook.writestr('xl/workbook.xml', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Cold call list" sheetId="1" r:id="rId1"/></sheets></workbook>'
+        ))
+        workbook.writestr('xl/_rels/workbook.xml.rels', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+            '</Relationships>'
+        ))
+        workbook.writestr('xl/styles.xml', (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+            '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
+            '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+            '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+            '</styleSheet>'
+        ))
+        workbook.writestr('xl/worksheets/sheet1.xml', sheet_xml)
+    output.seek(0)
+    return output
 
 
 def _safe_upload_filename(original_filename):
@@ -2176,6 +2274,11 @@ def gf_model_tool():
     return send_file(GF_MODEL_PAGE_PATH)
 
 
+@app.route('/tools/cold-call-list')
+def cold_call_list_tool():
+    return render_template('cold_call_list.html')
+
+
 @app.route('/api/ping')
 def ping():
     """Session keepalive — called by frontend every 60s to refresh session TTL."""
@@ -2197,6 +2300,35 @@ def get_task_status(task_id):
     if task['result']:
         resp.update(task['result'])
     return jsonify(resp)
+
+
+@app.route('/api/cold-call-list/xlsx', methods=['POST'])
+def download_cold_call_list_xlsx():
+    data = request.get_json(silent=True) or {}
+    raw_numbers = data.get('numbers')
+    if not isinstance(raw_numbers, list):
+        return jsonify({'error': '請提交電話號碼列表。'}), 400
+
+    numbers = []
+    seen = set()
+    for raw_number in raw_numbers:
+        number = _normalize_hk_mobile_number(raw_number)
+        if number and number not in seen:
+            seen.add(number)
+            numbers.append(number)
+
+    if not numbers:
+        return jsonify({'error': '沒有有效電話號碼可下載。'}), 400
+    if len(numbers) > 100:
+        return jsonify({'error': '每次最多下載 100 個電話號碼。'}), 400
+
+    workbook = _cold_call_xlsx(numbers)
+    return send_file(
+        workbook,
+        as_attachment=True,
+        download_name='cold_call_list.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
 
 
 @app.route('/api/gf/generate', methods=['POST'])

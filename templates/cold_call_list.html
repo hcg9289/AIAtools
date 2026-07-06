@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIAtools - Cold call list</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #f4f1ea;
+            --surface: #fffdf7;
+            --surface-2: #ece6d8;
+            --ink: #1d2521;
+            --muted: #68736d;
+            --line: #d7cdb9;
+            --focus: #0f766e;
+            --accent: #b7791f;
+            --danger: #a33a2a;
+            --shadow: 0 20px 60px rgba(46, 35, 17, 0.12);
+        }
+
+        body {
+            min-height: 100vh;
+            font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif;
+            background:
+                linear-gradient(135deg, rgba(183,121,31,0.12), transparent 34%),
+                linear-gradient(225deg, rgba(15,118,110,0.10), transparent 38%),
+                var(--bg);
+            color: var(--ink);
+            padding: 24px 16px;
+        }
+
+        a { color: inherit; }
+
+        .shell {
+            width: min(1120px, 100%);
+            margin: 0 auto;
+            display: grid;
+            gap: 18px;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            min-height: 48px;
+        }
+
+        .back {
+            border: 1px solid var(--line);
+            background: rgba(255,253,247,0.88);
+            color: var(--ink);
+            text-decoration: none;
+            font-weight: 800;
+            padding: 12px 14px;
+        }
+
+        .session {
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            text-align: right;
+        }
+
+        .hero {
+            border: 1px solid var(--line);
+            background: linear-gradient(160deg, #1f2a25 0%, #263b35 62%, #b7791f 150%);
+            color: #fff8ea;
+            box-shadow: var(--shadow);
+            padding: 30px;
+            display: grid;
+            grid-template-columns: 1.05fr 0.95fr;
+            gap: 24px;
+            align-items: end;
+        }
+
+        .eyebrow {
+            font-size: 12px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: rgba(255,248,234,0.7);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-family: "Noto Serif TC", "Microsoft JhengHei", serif;
+            font-size: clamp(38px, 6vw, 68px);
+            line-height: 0.96;
+            letter-spacing: 0;
+            margin-bottom: 18px;
+        }
+
+        .hero p {
+            color: rgba(255,248,234,0.78);
+            line-height: 1.75;
+            max-width: 560px;
+            font-weight: 600;
+        }
+
+        .stat-strip {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            border: 1px solid rgba(255,248,234,0.25);
+        }
+
+        .stat {
+            min-height: 108px;
+            padding: 18px;
+            border-right: 1px solid rgba(255,248,234,0.25);
+        }
+
+        .stat:last-child { border-right: 0; }
+
+        .stat strong {
+            display: block;
+            font-size: 31px;
+            line-height: 1;
+            margin-bottom: 12px;
+        }
+
+        .stat span {
+            color: rgba(255,248,234,0.72);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .workspace {
+            display: grid;
+            grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+            gap: 18px;
+            align-items: start;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            background: rgba(255,253,247,0.92);
+            box-shadow: var(--shadow);
+            padding: 22px;
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        h2 {
+            font-size: 20px;
+            line-height: 1.2;
+        }
+
+        .count {
+            min-width: 86px;
+            text-align: center;
+            border: 1px solid var(--line);
+            background: var(--surface-2);
+            color: var(--ink);
+            font-weight: 900;
+            padding: 9px 10px;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 230px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            background: var(--surface);
+            color: var(--ink);
+            padding: 14px;
+            font: 700 18px/1.6 "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+            outline: none;
+        }
+
+        textarea:focus {
+            border-color: var(--focus);
+            box-shadow: 0 0 0 3px rgba(15,118,110,0.14);
+        }
+
+        .helper {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+            font-weight: 650;
+        }
+
+        .actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 18px;
+        }
+
+        button {
+            border: 0;
+            cursor: pointer;
+            font: 900 15px "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+            min-height: 48px;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
+        .primary {
+            grid-column: 1 / -1;
+            background: var(--ink);
+            color: #fffaf0;
+        }
+
+        .secondary {
+            border: 1px solid var(--line);
+            background: var(--surface-2);
+            color: var(--ink);
+        }
+
+        .result-panel {
+            min-height: 520px;
+            display: grid;
+            grid-template-rows: auto minmax(300px, 1fr) auto;
+        }
+
+        .phone-list {
+            border: 1px solid var(--line);
+            background: var(--surface);
+            max-height: 610px;
+            overflow: auto;
+        }
+
+        .empty {
+            display: grid;
+            place-items: center;
+            min-height: 300px;
+            color: var(--muted);
+            font-weight: 800;
+            text-align: center;
+            padding: 24px;
+        }
+
+        .phone-row {
+            min-height: 46px;
+            display: grid;
+            grid-template-columns: 1fr 82px;
+            align-items: center;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .phone-row:last-child { border-bottom: 0; }
+
+        .phone-number {
+            font: 900 18px/1 "Noto Sans Mono", "Consolas", monospace;
+            letter-spacing: 0.04em;
+            padding: 0 16px;
+        }
+
+        .delete {
+            height: 100%;
+            min-height: 46px;
+            border-left: 1px solid var(--line);
+            background: transparent;
+            color: var(--danger);
+        }
+
+        .download-bar {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        .status {
+            margin-top: 12px;
+            color: var(--muted);
+            min-height: 22px;
+            font-size: 13px;
+            line-height: 1.6;
+            font-weight: 750;
+        }
+
+        .error { color: var(--danger); }
+
+        @media (max-width: 880px) {
+            body { padding: 14px; }
+            .hero { grid-template-columns: 1fr; padding: 24px; }
+            .stat-strip { grid-template-columns: 1fr; }
+            .stat { border-right: 0; border-bottom: 1px solid rgba(255,248,234,0.25); }
+            .stat:last-child { border-bottom: 0; }
+            .workspace { grid-template-columns: 1fr; }
+            .topbar { align-items: stretch; flex-direction: column; }
+            .session { text-align: left; }
+        }
+
+        @media (max-width: 520px) {
+            .actions, .download-bar { grid-template-columns: 1fr; }
+            .phone-row { grid-template-columns: 1fr 72px; }
+            .phone-number { font-size: 16px; }
+        }
+    </style>
+</head>
+<body>
+<main class="shell">
+    <nav class="topbar" aria-label="工具導覽">
+        <a class="back" href="/">返回工具列表</a>
+        <div class="session">1008 AIAtools / Cold call list</div>
+    </nav>
+
+    <section class="hero">
+        <div>
+            <div class="eyebrow">Cold call list</div>
+            <h1>電話名單生成</h1>
+            <p>輸入一個或多個香港手機號碼，按生成後補齊至 100 個號碼；隨機號碼只使用 5、6、9 開頭的八位數。</p>
+        </div>
+        <div class="stat-strip" aria-label="生成規則">
+            <div class="stat"><strong>100</strong><span>每次名單目標數量</span></div>
+            <div class="stat"><strong>5/6/9</strong><span>隨機號碼開頭</span></div>
+            <div class="stat"><strong>TXT/XLSX</strong><span>下載不包含刪除鍵</span></div>
+        </div>
+    </section>
+
+    <section class="workspace">
+        <div class="panel">
+            <div class="panel-title">
+                <h2>輸入號碼</h2>
+            </div>
+            <label for="seedNumbers">電話號碼</label>
+            <textarea id="seedNumbers" placeholder="例如：&#10;91234567&#10;61234567"></textarea>
+            <div class="helper">可用換行、空格、逗號分隔；支援移除 +852、空格與短橫。</div>
+            <div class="actions">
+                <button class="primary" id="generateBtn" type="button">生成名單</button>
+                <button class="secondary" id="clearInputBtn" type="button">清空輸入</button>
+                <button class="secondary" id="clearListBtn" type="button">清空名單</button>
+            </div>
+            <div class="status" id="statusText"></div>
+        </div>
+
+        <div class="panel result-panel">
+            <div class="panel-title">
+                <h2>名單結果</h2>
+                <div class="count"><span id="listCount">0</span> / 100</div>
+            </div>
+            <div class="phone-list" id="phoneList">
+                <div class="empty">尚未生成名單</div>
+            </div>
+            <div>
+                <div class="download-bar">
+                    <button class="secondary" id="downloadTxtBtn" type="button" disabled>下載 TXT</button>
+                    <button class="secondary" id="downloadXlsxBtn" type="button" disabled>下載 XLSX</button>
+                </div>
+                <div class="status" id="downloadStatus"></div>
+            </div>
+        </div>
+    </section>
+</main>
+
+<script>
+    let phoneNumbers = [];
+    let pingInterval = null;
+
+    const seedInput = document.getElementById('seedNumbers');
+    const phoneList = document.getElementById('phoneList');
+    const listCount = document.getElementById('listCount');
+    const statusText = document.getElementById('statusText');
+    const downloadStatus = document.getElementById('downloadStatus');
+    const generateBtn = document.getElementById('generateBtn');
+    const clearInputBtn = document.getElementById('clearInputBtn');
+    const clearListBtn = document.getElementById('clearListBtn');
+    const downloadTxtBtn = document.getElementById('downloadTxtBtn');
+    const downloadXlsxBtn = document.getElementById('downloadXlsxBtn');
+
+    function startKeepAlive() {
+        if (pingInterval) return;
+        pingInterval = setInterval(() => fetch('/api/ping').catch(() => {}), 60000);
+    }
+
+    function normalizePhoneNumber(value) {
+        let digits = String(value || '').replace(/\D+/g, '');
+        if (digits.startsWith('852') && digits.length === 11) {
+            digits = digits.slice(3);
+        }
+        return /^[569]\d{7}$/.test(digits) ? digits : null;
+    }
+
+    function parseSeedNumbers(text) {
+        const matches = String(text || '').match(/(?:\+?852[\s-]*)?[569](?:[\s-]*\d){7}/g) || [];
+        const seen = new Set();
+        const valid = [];
+        const invalid = [];
+
+        matches.forEach((match) => {
+            const phone = normalizePhoneNumber(match);
+            if (!phone) {
+                invalid.push(match.trim());
+                return;
+            }
+            if (!seen.has(phone)) {
+                seen.add(phone);
+                valid.push(phone);
+            }
+        });
+
+        return { valid, invalid };
+    }
+
+    function randomPhoneNumber() {
+        const prefixes = ['5', '6', '9'];
+        let phone = prefixes[Math.floor(Math.random() * prefixes.length)];
+        while (phone.length < 8) {
+            phone += Math.floor(Math.random() * 10);
+        }
+        return phone;
+    }
+
+    function buildList(seedNumbers) {
+        const seen = new Set(seedNumbers);
+        const output = seedNumbers.slice(0, 100);
+
+        while (output.length < 100) {
+            const candidate = randomPhoneNumber();
+            if (!seen.has(candidate)) {
+                seen.add(candidate);
+                output.push(candidate);
+            }
+        }
+
+        return output;
+    }
+
+    function setStatus(message, isError = false) {
+        statusText.textContent = message;
+        statusText.classList.toggle('error', isError);
+    }
+
+    function setDownloadStatus(message, isError = false) {
+        downloadStatus.textContent = message;
+        downloadStatus.classList.toggle('error', isError);
+    }
+
+    function renderList() {
+        listCount.textContent = phoneNumbers.length;
+        downloadTxtBtn.disabled = phoneNumbers.length === 0;
+        downloadXlsxBtn.disabled = phoneNumbers.length === 0;
+
+        if (!phoneNumbers.length) {
+            phoneList.innerHTML = '<div class="empty">尚未生成名單</div>';
+            return;
+        }
+
+        phoneList.innerHTML = '';
+        phoneNumbers.forEach((phone, index) => {
+            const row = document.createElement('div');
+            row.className = 'phone-row';
+
+            const number = document.createElement('div');
+            number.className = 'phone-number';
+            number.textContent = phone;
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'delete';
+            deleteBtn.type = 'button';
+            deleteBtn.textContent = '刪除';
+            deleteBtn.addEventListener('click', () => {
+                phoneNumbers.splice(index, 1);
+                setDownloadStatus('');
+                renderList();
+            });
+
+            row.append(number, deleteBtn);
+            phoneList.appendChild(row);
+        });
+    }
+
+    function generateList() {
+        const parsed = parseSeedNumbers(seedInput.value);
+        if (!parsed.valid.length) {
+            phoneNumbers = [];
+            renderList();
+            setStatus('請輸入至少一個有效的 5、6、9 開頭八位電話號碼。', true);
+            return;
+        }
+
+        phoneNumbers = buildList(parsed.valid);
+        renderList();
+
+        const clipped = parsed.valid.length > 100 ? '；已保留前 100 個有效號碼' : '';
+        const invalid = parsed.invalid.length ? `；忽略 ${parsed.invalid.length} 個無效項目` : '';
+        setStatus(`已生成 ${phoneNumbers.length} 個號碼，其中 ${Math.min(parsed.valid.length, 100)} 個來自輸入${clipped}${invalid}。`);
+        setDownloadStatus('');
+    }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    function downloadTxt() {
+        if (!phoneNumbers.length) return;
+        const blob = new Blob([phoneNumbers.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
+        downloadBlob(blob, 'cold_call_list.txt');
+        setDownloadStatus('TXT 已生成。');
+    }
+
+    async function downloadXlsx() {
+        if (!phoneNumbers.length) return;
+        downloadXlsxBtn.disabled = true;
+        setDownloadStatus('正在生成 XLSX...');
+
+        try {
+            const response = await fetch('/api/cold-call-list/xlsx', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ numbers: phoneNumbers })
+            });
+
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.error || 'XLSX 生成失敗');
+            }
+
+            const blob = await response.blob();
+            downloadBlob(blob, 'cold_call_list.xlsx');
+            setDownloadStatus('XLSX 已生成。');
+        } catch (error) {
+            setDownloadStatus(error.message || 'XLSX 生成失敗', true);
+        } finally {
+            downloadXlsxBtn.disabled = phoneNumbers.length === 0;
+        }
+    }
+
+    generateBtn.addEventListener('click', generateList);
+    clearInputBtn.addEventListener('click', () => {
+        seedInput.value = '';
+        seedInput.focus();
+        setStatus('');
+    });
+    clearListBtn.addEventListener('click', () => {
+        phoneNumbers = [];
+        renderList();
+        setStatus('');
+        setDownloadStatus('');
+    });
+    downloadTxtBtn.addEventListener('click', downloadTxt);
+    downloadXlsxBtn.addEventListener('click', downloadXlsx);
+
+    renderList();
+    startKeepAlive();
+</script>
+</body>
+</html>
