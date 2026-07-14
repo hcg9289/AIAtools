@@ -280,6 +280,29 @@
             margin-top: 16px;
         }
 
+        .application-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 48px;
+            margin-top: 10px;
+            padding: 12px 16px;
+            border: 1px solid var(--focus);
+            background: var(--focus);
+            color: #fffaf0;
+            text-align: center;
+            text-decoration: none;
+            font: 900 15px "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+        }
+
+        .application-link:hover { background: #0b5f59; }
+
+        .application-link:focus-visible {
+            outline: 3px solid rgba(15,118,110,0.3);
+            outline-offset: 3px;
+        }
+
         .status {
             margin-top: 12px;
             color: var(--muted);
@@ -358,6 +381,11 @@
                     <button class="secondary" id="downloadTxtBtn" type="button" disabled>下載 TXT</button>
                     <button class="secondary" id="downloadXlsxBtn" type="button" disabled>下載 XLSX</button>
                 </div>
+                <a class="application-link"
+                   href="https://forms.office.com/pages/responsepage.aspx?id=cpPGV5dH20qnXWcOm70b-vhMtQ_F8aFDm-MQeoWn2O5UM1VMWEVUWTJPQTFQMzY1WlNKMVhOV0JRRy4u&amp;origin=lprLink&amp;route=shorturl"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   aria-label="開啟申請 Cold Call 流程表格（新視窗）">申請 Cold Call 流程</a>
                 <div class="status" id="downloadStatus"></div>
             </div>
         </div>
