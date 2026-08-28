@@ -2271,7 +2271,20 @@ def gf_model_tool():
             404,
             {'Content-Type': 'text/html; charset=utf-8'},
         )
-    return send_file(GF_MODEL_PAGE_PATH)
+    with open(GF_MODEL_PAGE_PATH, 'r', encoding='utf-8') as model_page:
+        html = model_page.read()
+    helper_tag = '<script src="/tools/gf-model-pgs-helper.js"></script>'
+    if helper_tag not in html:
+        html = html.replace('</body>', f'{helper_tag}</body>')
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/tools/gf-model-pgs-helper.js')
+def gf_model_pgs_helper():
+    return send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_pgs_helper.js'),
+        mimetype='application/javascript',
+    )
 
 
 @app.route('/tools/cold-call-list')

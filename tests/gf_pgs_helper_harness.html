@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-TW">
+<head><meta charset="utf-8"><title>GF PGS helper test</title></head>
+<body>
+  <div class="tableWrap"><table id="financeTable"></table></div>
+  <script>
+    let currentFinanceResult = null;
+    function invalidateFinanceResult(){ currentFinanceResult = null; }
+    function renderFinanceResult(result){ currentFinanceResult = result; }
+  </script>
+  <script src="../assets/gf/gf_model_pgs_helper.js"></script>
+  <script>
+    const results=[];
+    function test(name,fn){try{fn();results.push('PASS '+name)}catch(error){results.push('FAIL '+name+': '+error.message)}}
+    function assert(condition,message){if(!condition)throw new Error(message)}
+    test('介面和書籤存在',()=>{
+      assert(document.getElementById('pgsCopy'),'欠缺複製按鈕');
+      assert(document.getElementById('pgsBookmarklet').href.startsWith('javascript:'),'欠缺書籤程式');
+      assert(document.getElementById('pgsCopy').disabled,'未計算時按鈕應停用');
+    });
+    test('按原定提款排程映射72年',()=>{
+      const payload=JSON.parse(GFPgsHelper.buildPayload({schedule:{1:101,6:606,72:7272}}));
+      assert(payload.withdrawals.length===72,'年度不完整');
+      assert(payload.withdrawals[0][1]===101&&payload.withdrawals[5][1]===606&&payload.withdrawals[71][1]===7272,'年度映射錯誤');
+      assert(payload.withdrawals[1][1]===0,'欠缺年度未補0');
+    });
+    test('拒絕偽造重複與非法資料',()=>{
+      const payload=JSON.parse(GFPgsHelper.buildPayload({schedule:{6:600}}));
+      const cases=[
+        value=>{value.format='OTHER'},
+        value=>{value.withdrawals[1][0]=1},
+        value=>{value.withdrawals[0][0]=73},
+        value=>{value.withdrawals[5][1]=-1},
+        value=>{value.withdrawals[5][1]=100000000000},
+        value=>{value.withdrawals[5][1]=1.5},
+      ];
+      cases.forEach(mutate=>{const value=structuredClone(payload);mutate(value);let rejected=false;try{GFPgsHelper.validatePayload(value)}catch(_){rejected=true}assert(rejected,'非法資料未被拒絕')});
+    });
+    test('結果狀態控制複製按鈕',()=>{
+      renderFinanceResult({schedule:{6:600}});
+      assert(!document.getElementById('pgsCopy').disabled,'有結果仍被停用');
+      invalidateFinanceResult();
+      assert(document.getElementById('pgsCopy').disabled,'輸入改變後未停用');
+    });
+    test('書籤只填格不提交',()=>{
+      const code=GFPgsHelper.BOOKMARKLET_CODE;
+      assert(code.includes('withDraw-')&&code.includes('HTMLInputElement.prototype'),'未按PGS年度欄位填入');
+      assert(code.includes('new Event("input"')&&code.includes('new Event("change"'),'欠缺React事件');
+      assert(code.includes('el.disabled')&&code.includes('navigator.clipboard.readText')&&code.includes('prompt('),'欠缺鎖定或剪貼簿後備處理');
+      assert(!/\.click\s*\(|\.submit\s*\(|requestSubmit\s*\(/.test(code),'書籤含提交動作');
+      new Function(code.slice('javascript:'.length));
+    });
+    const report=document.createElement('pre');report.id='report';report.textContent=results.join('\n');document.body.appendChild(report);
+  </script>
+</body>
+</html>
