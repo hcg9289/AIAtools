@@ -69,6 +69,7 @@ GF_MODEL_PAGE_PATH = os.environ.get(
     'GF_MODEL_PAGE_PATH',
     os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
 )
+GF_MODEL_ASSET_VERSION = '20260829-2'
 GF_WITHDRAWAL_TARGET_YEAR = 20
 GF_OCR_ZOOM = float(os.environ.get('GF_OCR_ZOOM', '4.0'))
 GF_OCR_LANG = os.environ.get('GF_OCR_LANG', 'eng')
@@ -2273,8 +2274,10 @@ def gf_model_tool():
         )
     with open(GF_MODEL_PAGE_PATH, 'r', encoding='utf-8') as model_page:
         html = model_page.read()
-    minimum_basic_patch_tag = '<script src="/tools/gf-model-minimum-basic-patch.js"></script>'
-    helper_tag = '<script src="/tools/gf-model-pgs-helper.js"></script>'
+    minimum_basic_patch_tag = (
+        f'<script src="/tools/gf-model-minimum-basic-patch.js?v={GF_MODEL_ASSET_VERSION}"></script>'
+    )
+    helper_tag = f'<script src="/tools/gf-model-pgs-helper.js?v={GF_MODEL_ASSET_VERSION}"></script>'
     if minimum_basic_patch_tag not in html:
         if helper_tag in html:
             html = html.replace(helper_tag, f'{minimum_basic_patch_tag}{helper_tag}', 1)
@@ -2282,23 +2285,30 @@ def gf_model_tool():
             html = html.replace('</body>', f'{minimum_basic_patch_tag}{helper_tag}</body>')
     elif helper_tag not in html:
         html = html.replace('</body>', f'{helper_tag}</body>')
-    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    return html, 200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, max-age=0',
+    }
 
 
 @app.route('/tools/gf-model-minimum-basic-patch.js')
 def gf_model_minimum_basic_patch():
-    return send_file(
+    response = send_file(
         os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_minimum_basic_patch.js'),
         mimetype='application/javascript',
     )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 
 @app.route('/tools/gf-model-pgs-helper.js')
 def gf_model_pgs_helper():
-    return send_file(
+    response = send_file(
         os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_pgs_helper.js'),
         mimetype='application/javascript',
     )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 
 @app.route('/tools/cold-call-list')

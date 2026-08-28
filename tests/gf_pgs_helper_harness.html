@@ -22,6 +22,13 @@
     });
     test('加入書籤流程誠實顯示限制及手動步驟',()=>{
       assert(GFPgsHelper.requestBookmarkInstall.toString().includes('window.confirm'),'加入書籤前沒有確認');
+      assert(document.getElementById('pgsInstall').textContent==='設定 PGS 一鍵填入','按鈕名稱沒有清楚說明用途');
+      let confirmationMessage='';
+      const originalConfirm=window.confirm;
+      window.confirm=message=>{confirmationMessage=message;return false};
+      document.getElementById('pgsInstall').click();
+      window.confirm=originalConfirm;
+      assert(confirmationMessage.includes('是否加入「PGS 一鍵填入」書籤？'),'點擊按鈕沒有顯示加入書籤詢問');
       GFPgsHelper.revealInstallGuide();
       const panel=document.getElementById('pgsInstallPanel');
       const code=document.getElementById('pgsBookmarkletCode');
