@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-TW">
+<head><meta charset="utf-8"><title>GF minimum basic patch test</title></head>
+<body>
+  <script>
+    const currentCaseRows = [];
+    for (let year = 1; year <= 67; year += 1) {
+      currentCaseRows.push({
+        age: 28 + year,
+        policy_year: year,
+        requested_withdrawal: year === 67 ? 8644 : 0,
+        withdrawal_total: year === 67 ? 8644 : 0,
+        from_guaranteed_cash: year === 67 ? 209.9497 : 0,
+        from_reversionary_bonus: year === 67 ? 7.6536 : 0,
+        from_terminal_bonus: year === 67 ? 8426.3967 : 0,
+        post_basic_amount: year === 67 ? 1335.6771 : 41788,
+        post_guaranteed_cash: year === 67 ? 768.0147 : 1,
+        post_reversionary_bonus: 0,
+        post_terminal_bonus: year === 67 ? 30191.6456 : 0,
+        post_surrender_total: year === 67 ? 30959.6603 : 1,
+        cumulative_withdrawal: year === 67 ? 233314 : 0,
+        status: year === 67 ? '已提款' : '正常',
+        surrendered: false,
+        force: false,
+        source_ref: 'fixture',
+      });
+    }
+    currentCaseRows.push({
+      age: 96,
+      policy_year: 68,
+      requested_withdrawal: 8816,
+      withdrawal_total: 8816,
+      from_guaranteed_cash: 203.7750532,
+      from_reversionary_bonus: 6.010547,
+      from_terminal_bonus: 8606.2143998,
+      post_basic_amount: 983.1252793,
+      post_guaranteed_cash: 568.2466624,
+      post_reversionary_bonus: 0,
+      post_terminal_bonus: 23596.9729536,
+      post_surrender_total: 24165.219616,
+      cumulative_withdrawal: 242130,
+      status: '已提款',
+      surrendered: false,
+      force: false,
+      source_ref: 'fixture',
+    });
+    currentCaseRows.push({
+      age: 97,
+      policy_year: 69,
+      requested_withdrawal: 8919,
+      withdrawal_total: 8919,
+      from_guaranteed_cash: 195.727,
+      from_reversionary_bonus: 4.424,
+      from_terminal_bonus: 8718.849,
+      post_basic_amount: 645.4325,
+      post_guaranteed_cash: 374.0932,
+      post_reversionary_bonus: 0,
+      post_terminal_bonus: 16448.8461,
+      post_surrender_total: 16822.9394,
+      cumulative_withdrawal: 251049,
+      status: '已提款',
+      surrendered: false,
+      force: false,
+      source_ref: 'fixture',
+    });
+
+    let activeFixture = currentCaseRows;
+    function buildStateTransitionRows() {
+      return {
+        rows: activeFixture.map((row) => ({ ...row })),
+        surrendered: false,
+        surrenderYear: null,
+        baseSource: 'fixture',
+        baseSourceType: 'own_pdf',
+        modelVersion: 'fixture-v1',
+      };
+    }
+    function simulateMedicalFinancing() {
+      const state = buildStateTransitionRows();
+      const cumulative = state.rows.length ? state.rows[state.rows.length - 1].cumulative_withdrawal : 0;
+      return {
+        rows: state.rows,
+        surrendered: state.surrendered,
+        surrenderYear: state.surrenderYear,
+        actualTotal: cumulative,
+      };
+    }
+    function canFundMedicalSchedule() {
+      const result = simulateMedicalFinancing();
+      return { funded: !result.surrendered, result };
+    }
+    function findMinimumAnnualPremium() {
+      const check = canFundMedicalSchedule();
+      return { annual: check.funded ? 4137.01 : 4210.12, ...check };
+    }
+    function financeCsvText(result) {
+      const metadata = [
+        '"model_version","' + result.modelVersion + '"',
+        '"engine_parameter_fingerprint","fnv1a32:oldmodel"',
+        '',
+      ];
+      const headers = ['age', 'policy_year', 'medical_premium', 'actual_withdrawal', 'cumulative_withdrawal', 'guaranteed_cash_value', 'reversionary_bonus', 'terminal_bonus', 'total_value', 'status'];
+      const rows = result.rows.map((row) => [
+        row.age || '', row.policy_year, row.requested_withdrawal, row.withdrawal_total, row.cumulative_withdrawal,
+        row.post_guaranteed_cash, row.post_reversionary_bonus, row.post_terminal_bonus, row.post_surrender_total, row.status,
+      ]);
+      return '\uFEFF' + metadata.concat([headers], rows).map((row) => (
+        Array.isArray(row) ? row.map((value) => `"${value}"`).join(',') : row
+      )).join('\r\n');
+    }
+    window.GFFinanceCore = {
+      buildStateTransitionRows,
+      simulateMedicalFinancing,
+      canFundMedicalSchedule,
+      findMinimumAnnualPremium,
+      financeCsvText,
+    };
+    window.originalBuildStateTransitionRows = buildStateTransitionRows;
+  </script>
+  <script src="../assets/gf/gf_model_minimum_basic_patch.js"></script>
+  <script>
+    const results = [];
+    function test(name, fn) {
+      try { fn(); results.push(`PASS ${name}`); }
+      catch (error) { results.push(`FAIL ${name}: ${error.message}`); }
+    }
+    function assert(condition, message) { if (!condition) throw new Error(message); }
+
+    test('classic script全域函式及匯出已覆寫', () => {
+      assert(buildStateTransitionRows !== originalBuildStateTransitionRows, '全域buildStateTransitionRows仍是原函式');
+      assert(GFFinanceCore.buildStateTransitionRows === buildStateTransitionRows, 'GFFinanceCore未指向補丁函式');
+      assert(GFFinanceCore.simulateMedicalFinancing === simulateMedicalFinancing, 'simulate匯出未覆寫');
+      assert(GFFinanceCore.canFundMedicalSchedule === canFundMedicalSchedule, 'canFund匯出未覆寫');
+      assert(GFFinanceCore.findMinimumAnnualPremium === findMinimumAnnualPremium, 'minimum solver匯出未覆寫');
+      assert(GFFinanceCore.financeCsvText === financeCsvText, 'CSV匯出未覆寫');
+    });
+
+    test('分時最低基本金額門檻正確', () => {
+      const min = GFMinimumBasicPatch.minimumBasicForPolicyYear;
+      assert(min(1) === 20000 && min(4) === 20000, '投保至第4年門檻錯誤');
+      assert(min(5) === 10000 && min(14) === 10000, '第5至14年門檻錯誤');
+      assert(min(15) === 1500 && min(49) === 1500, '第15至49年門檻錯誤');
+      assert(min(50) === 1000 && min(100) === 1000, '第50至100年門檻錯誤');
+    });
+
+    test('本次案例Y1至Y67保持不變', () => {
+      const original = originalBuildStateTransitionRows().rows;
+      const patched = buildStateTransitionRows().rows;
+      assert(JSON.stringify(patched.slice(0, 67)) === JSON.stringify(original.slice(0, 67)), 'Y1至Y67被補丁改動');
+    });
+
+    test('本次案例Y68按PGS全額退保', () => {
+      const state = buildStateTransitionRows();
+      const row = state.rows[67];
+      assert(state.surrendered && state.surrenderYear === 68, '沒有在Y68退保');
+      assert(row.withdrawal_total === 32981.22, `Y68全額提款錯誤：${row.withdrawal_total}`);
+      assert(row.cumulative_withdrawal === 266295.22, `Y68累計提款錯誤：${row.cumulative_withdrawal}`);
+      assert(row.post_basic_amount === 0 && row.post_guaranteed_cash === 0 && row.post_reversionary_bonus === 0 && row.post_terminal_bonus === 0 && row.post_surrender_total === 0, 'Y68退保後仍有價值');
+      assert(row.status === '當年退保' && row.minimum_basic_surrender, 'Y68狀態沒有標示最低基本金額退保');
+    });
+
+    test('退保後原定排程保留但實際價值永久為零', () => {
+      const row = buildStateTransitionRows().rows[68];
+      assert(row.requested_withdrawal === 8919, 'Y69原定醫療提款不應被刪除');
+      assert(row.withdrawal_total === 0 && row.post_basic_amount === 0 && row.post_surrender_total === 0, 'Y69退保後復活');
+      assert(row.status === '已退保' && row.cumulative_withdrawal === 266295.22, 'Y69狀態或累計提款錯誤');
+    });
+
+    test('最低保費搜尋不接受最低基本金額退保', () => {
+      const check = canFundMedicalSchedule();
+      const solved = findMinimumAnnualPremium();
+      const simulated = simulateMedicalFinancing();
+      assert(!check.funded && check.reason === 'minimum_basic_surrender', 'canFund仍接受退保結果');
+      assert(!solved.funded && solved.annual !== 4137.01, 'minimum solver仍接受原有保費');
+      assert(simulated.surrenderYear === 68, 'UI模擬路徑未使用補丁');
+      assert(simulated.modelPatchVersion === GFMinimumBasicPatch.MODEL_PATCH_VERSION && simulated.modelVersion.includes(GFMinimumBasicPatch.MODEL_PATCH_VERSION), 'simulation欠缺補丁版本追溯');
+    });
+
+    test('CSV追溯新引擎及逐年退保原因', () => {
+      const csv = financeCsvText(simulateMedicalFinancing());
+      assert(csv.includes('"model_patch_version","gf-minimum-basic-v1-2026-08-29"'), 'CSV欠缺補丁版本');
+      assert(csv.includes('"minimum_basic_bands","1-4:20000;5-14:10000;15-49:1500;50-100:1000"'), 'CSV欠缺分時門檻');
+      assert(csv.includes('"engine_parameter_fingerprint","fnv1a32:') && !csv.includes('fnv1a32:oldmodel'), 'CSV仍使用舊引擎fingerprint');
+      assert(csv.includes('"post_basic_amount","surrender_reason"'), 'CSV欠缺審計欄');
+      const lines = csv.split(/\r?\n/);
+      const header = lines.findIndex((line) => line.startsWith('"age","policy_year",'));
+      assert(lines[header + 68].endsWith(',"0","minimum_basic"'), 'Y68沒有最低基本金額退保原因');
+      assert(lines[header + 69].endsWith(',"0","post_surrender"'), 'Y69沒有退保後原因');
+    });
+
+    test('既有forced sample全數提取5146', () => {
+      activeFixture = [
+        { policy_year: 31, requested_withdrawal: 2000, withdrawal_total: 2000, from_guaranteed_cash: 371, from_reversionary_bonus: 1, from_terminal_bonus: 1628, post_basic_amount: 1780, post_guaranteed_cash: 899, post_reversionary_bonus: 0, post_terminal_bonus: 3942, post_surrender_total: 4841, cumulative_withdrawal: 52000, status: '已提款', surrendered: false, force: false, source_ref: 'forced sample' },
+        { policy_year: 32, requested_withdrawal: 2000, withdrawal_total: 2000, from_guaranteed_cash: 350, from_reversionary_bonus: 1, from_terminal_bonus: 1649, post_basic_amount: 1200, post_guaranteed_cash: 551, post_reversionary_bonus: 0, post_terminal_bonus: 2595, post_surrender_total: 3146, cumulative_withdrawal: 54000, status: '已提款', surrendered: false, force: false, source_ref: 'forced sample' },
+      ];
+      const state = buildStateTransitionRows();
+      assert(state.surrendered && state.surrenderYear === 32, 'forced sample未在Y32退保');
+      assert(state.rows[1].withdrawal_total === 5146 && state.rows[1].post_surrender_total === 0, `forced sample全額提款錯誤：${state.rows[1].withdrawal_total}`);
+      activeFixture = currentCaseRows;
+    });
+
+    test('等於門檻不會誤退保', () => {
+      activeFixture = [{ policy_year: 50, requested_withdrawal: 1, withdrawal_total: 1, from_guaranteed_cash: 1, from_reversionary_bonus: 0, from_terminal_bonus: 0, post_basic_amount: 1000, post_guaranteed_cash: 500, post_reversionary_bonus: 0, post_terminal_bonus: 500, post_surrender_total: 1000, cumulative_withdrawal: 1, status: '已提款', surrendered: false, force: false, source_ref: 'boundary' }];
+      assert(!buildStateTransitionRows().surrendered, '等於最低基本金額被錯誤退保');
+      activeFixture = currentCaseRows;
+    });
+
+    const report = document.createElement('pre');
+    report.id = 'report';
+    report.textContent = results.join('\n');
+    document.body.appendChild(report);
+  </script>
+</body>
+</html>

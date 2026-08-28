@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the tracked PGS helper browser tests without network or VPS access."""
+"""Run the GF minimum-basic browser regression tests without network access."""
 
 from __future__ import annotations
 
@@ -14,15 +14,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-PAGE = ROOT / "gf_pgs_helper_harness.html"
+PAGE = ROOT / "gf_minimum_basic_patch_harness.html"
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-EXPECTED_TESTS = 6
+EXPECTED_TESTS = 9
 
 
 def main() -> None:
     if not CHROME.exists():
         raise SystemExit(f"Chrome not found: {CHROME}")
-    with tempfile.TemporaryDirectory(prefix="gf-pgs-helper-test-") as profile, tempfile.NamedTemporaryFile() as output:
+    with tempfile.TemporaryDirectory(prefix="gf-min-basic-test-") as profile, tempfile.NamedTemporaryFile() as output:
         process = subprocess.Popen(
             [
                 str(CHROME),
@@ -58,7 +58,7 @@ def main() -> None:
         process.wait(timeout=5)
 
     if not report:
-        raise SystemExit("FAIL browser did not emit the PGS helper test report")
+        raise SystemExit("FAIL browser did not emit the GF minimum-basic test report")
     print(report)
     lines = [line for line in report.splitlines() if line.strip()]
     if len(lines) != EXPECTED_TESTS or not all(line.startswith("PASS") for line in lines):

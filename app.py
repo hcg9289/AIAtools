@@ -2273,10 +2273,24 @@ def gf_model_tool():
         )
     with open(GF_MODEL_PAGE_PATH, 'r', encoding='utf-8') as model_page:
         html = model_page.read()
+    minimum_basic_patch_tag = '<script src="/tools/gf-model-minimum-basic-patch.js"></script>'
     helper_tag = '<script src="/tools/gf-model-pgs-helper.js"></script>'
-    if helper_tag not in html:
+    if minimum_basic_patch_tag not in html:
+        if helper_tag in html:
+            html = html.replace(helper_tag, f'{minimum_basic_patch_tag}{helper_tag}', 1)
+        else:
+            html = html.replace('</body>', f'{minimum_basic_patch_tag}{helper_tag}</body>')
+    elif helper_tag not in html:
         html = html.replace('</body>', f'{helper_tag}</body>')
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/tools/gf-model-minimum-basic-patch.js')
+def gf_model_minimum_basic_patch():
+    return send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_minimum_basic_patch.js'),
+        mimetype='application/javascript',
+    )
 
 
 @app.route('/tools/gf-model-pgs-helper.js')
