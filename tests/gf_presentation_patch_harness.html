@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <title>GF presentation patch test</title>
+  <link rel="stylesheet" href="../assets/gf/gf_model_presentation.css">
+</head>
+<body>
+  <div id="financeSummary" class="summary"></div>
+  <div class="tableWrap"><table id="financeTable" class="dataTable finance-table"></table></div>
+  <script>
+    let currentFinanceResult = null;
+    function clearElement(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+    function metric(container, label, value) {
+      const card = document.createElement('div'); card.className = 'metric';
+      const span = document.createElement('span'); span.textContent = label;
+      const bold = document.createElement('b'); bold.textContent = value;
+      card.append(span, bold); container.append(card);
+    }
+    function renderFinanceResult(result) {
+      currentFinanceResult = result;
+      const summary = document.getElementById('financeSummary'); clearElement(summary);
+      metric(summary, 'GF 年繳保費', 'USD 4,000');
+      metric(summary, '醫療保費總額', 'USD ' + result.requestedTotal);
+      metric(summary, '實際累計提款', 'USD ' + result.actualTotal);
+      metric(summary, '最終狀態', result.surrendered ? '退保' : '保單持續');
+      const table = document.getElementById('financeTable'); clearElement(table);
+      table.innerHTML = '<thead><tr><th>年齡</th><th>保單年度</th><th>醫療保費</th><th>累計提款</th><th>狀態</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      result.rows.forEach((item) => {
+        const row = document.createElement('tr');
+        if (item.requested_withdrawal) row.className = 'active-row';
+        [item.age, item.policy_year, item.requested_withdrawal, item.cumulative_withdrawal, item.status].forEach((value) => {
+          const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+        });
+        tbody.append(row);
+      });
+      table.append(tbody);
+    }
+    function financeCsvText(result) {
+      const rows = result.rows.map((row) => [row.age, row.policy_year, row.requested_withdrawal, row.cumulative_withdrawal]);
+      return [['age', 'policy_year', 'medical_premium', 'cumulative_withdrawal'], ...rows]
+        .map((row) => row.map((value) => `"${value}"`).join(',')).join('\r\n');
+    }
+    function buildStateTransitionRows() { return { rows: [] }; }
+    function simulateMedicalFinancing() { return { rows: [], modelVersion: 'fixture-v1' }; }
+    function canFundMedicalSchedule() { return { funded: true, result: simulateMedicalFinancing() }; }
+    function findMinimumAnnualPremium() { return { annual: 1, funded: true }; }
+    window.GFFinanceCore = {
+      buildStateTransitionRows,
+      simulateMedicalFinancing,
+      canFundMedicalSchedule,
+      findMinimumAnnualPremium,
+      financeCsvText,
+    };
+  </script>
+  <script src="../assets/gf/gf_model_minimum_basic_patch.js"></script>
+  <script src="../assets/gf/gf_model_presentation.js"></script>
+  <script>
+    const result = {
+      input: { annual: 4000 },
+      schedule: { 70: 1000, 71: 2000, 72: 3000 },
+      requestedTotal: 6000,
+      actualTotal: 6000,
+      surrendered: false,
+      surrenderYear: null,
+      rows: [
+        { age: 98, policy_year: 70, requested_withdrawal: 1000, withdrawal_total: 1000, cumulative_withdrawal: 1000, status: '已提款' },
+        { age: 99, policy_year: 71, requested_withdrawal: 2000, withdrawal_total: 2000, cumulative_withdrawal: 3000, status: '已提款' },
+        { age: 100, policy_year: 72, requested_withdrawal: 3000, withdrawal_total: 3000, cumulative_withdrawal: 6000, status: '已提款' },
+      ],
+    };
+    const originalSnapshot = JSON.stringify(result);
+    renderFinanceResult(result);
+
+    const results = [];
+    function test(name, fn) {
+      try { fn(); results.push(`PASS ${name}`); }
+      catch (error) { results.push(`FAIL ${name}: ${error.message}`); }
+    }
+    function assert(condition, message) { if (!condition) throw new Error(message); }
+
+    test('99歲保留而100歲從UI移除', () => {
+      const ages = Array.from(document.querySelectorAll('#financeTable tbody tr')).map((row) => Number(row.cells[0].textContent));
+      assert(JSON.stringify(ages) === JSON.stringify([98, 99]), `UI年齡錯誤：${ages}`);
+      assert(document.getElementById('financeAgeLimitNote')?.textContent.includes('99 歲'), '欠缺99歲顯示提示');
+    });
+
+    test('摘要只計算至99歲', () => {
+      const cards = Object.fromEntries(Array.from(document.querySelectorAll('#financeSummary .metric')).map((card) => [card.querySelector('span').textContent, card.querySelector('b').textContent]));
+      assert(cards['醫療保費總額'] === 'USD 3,000', `醫療總額錯誤：${cards['醫療保費總額']}`);
+      assert(cards['實際累計提款'] === 'USD 3,000', `實際提款錯誤：${cards['實際累計提款']}`);
+      assert(cards['截至 99 歲狀態'] === '保單持續', '狀態卡沒有清楚標示99歲範圍');
+    });
+
+    test('醫療融資CSV與UI同樣截止99歲', () => {
+      const csv = financeCsvText(result);
+      assert(csv.includes('"99","71","2000","3000"'), 'CSV欠缺99歲');
+      assert(!csv.includes('"100","72"'), 'CSV仍包含100歲');
+      assert(csv.includes('"maximum_display_age","99"'), 'CSV欠缺99歲範圍追溯');
+      assert(GFFinanceCore.financeCsvText(result) === csv, 'GFFinanceCore仍使用未截斷匯出');
+    });
+
+    test('顯示補丁沒有改寫計算結果', () => {
+      assert(JSON.stringify(result) === originalSnapshot, '原始result被改寫');
+      assert(currentFinanceResult === result, 'currentFinanceResult不再指向原計算結果');
+      assert(result.rows.length === 3 && result.actualTotal === 6000, '引擎數值被截斷');
+    });
+
+    test('手機卡片具備欄位標籤', () => {
+      const labels = Array.from(document.querySelectorAll('#financeTable tbody tr:first-child td')).map((cell) => cell.dataset.label);
+      assert(labels.join('|') === '年齡|保單年度|醫療保費|累計提款|狀態', `欄位標籤錯誤：${labels}`);
+      assert(document.querySelector('.tableWrap').classList.contains('gf-finance-table-wrap'), '結果表未套用專用樣式類別');
+      assert(getComputedStyle(document.querySelector('#financeSummary .metric')).borderRadius === '16px', '外部CSS未載入');
+    });
+
+    const report = document.createElement('pre');
+    report.id = 'report'; report.textContent = results.join('\n'); document.body.append(report);
+  </script>
+</body>
+</html>

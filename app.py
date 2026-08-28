@@ -2279,14 +2279,34 @@ def gf_model_tool():
     minimum_basic_patch_tag = (
         f'<script src="/tools/gf-model-minimum-basic-patch.js?v={GF_MODEL_ASSET_VERSION}"></script>'
     )
+    presentation_style_tag = (
+        f'<link rel="stylesheet" href="/tools/gf-model-presentation.css?v={GF_MODEL_ASSET_VERSION}">'
+    )
+    presentation_patch_tag = (
+        f'<script src="/tools/gf-model-presentation.js?v={GF_MODEL_ASSET_VERSION}"></script>'
+    )
     helper_tag = f'<script src="/tools/gf-model-pgs-helper.js?v={GF_MODEL_ASSET_VERSION}"></script>'
+    if presentation_style_tag not in html:
+        html = html.replace('</head>', f'{presentation_style_tag}</head>', 1)
     if minimum_basic_patch_tag not in html:
         if helper_tag in html:
-            html = html.replace(helper_tag, f'{minimum_basic_patch_tag}{helper_tag}', 1)
+            html = html.replace(
+                helper_tag,
+                f'{minimum_basic_patch_tag}{presentation_patch_tag}{helper_tag}',
+                1,
+            )
         else:
-            html = html.replace('</body>', f'{minimum_basic_patch_tag}{helper_tag}</body>')
-    elif helper_tag not in html:
-        html = html.replace('</body>', f'{helper_tag}</body>')
+            html = html.replace(
+                '</body>',
+                f'{minimum_basic_patch_tag}{presentation_patch_tag}{helper_tag}</body>',
+            )
+    else:
+        if presentation_patch_tag not in html:
+            anchor = helper_tag if helper_tag in html else '</body>'
+            replacement = f'{presentation_patch_tag}{anchor}'
+            html = html.replace(anchor, replacement, 1)
+        if helper_tag not in html:
+            html = html.replace('</body>', f'{helper_tag}</body>')
     return html, 200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store, max-age=0',
@@ -2297,6 +2317,26 @@ def gf_model_tool():
 def gf_model_minimum_basic_patch():
     response = send_file(
         os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_minimum_basic_patch.js'),
+        mimetype='application/javascript',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-presentation.css')
+def gf_model_presentation_css():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_presentation.css'),
+        mimetype='text/css',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-presentation.js')
+def gf_model_presentation_patch():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_presentation.js'),
         mimetype='application/javascript',
     )
     response.headers['Cache-Control'] = 'no-store, max-age=0'

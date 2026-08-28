@@ -1,0 +1,173 @@
+/* GF medical-financing results only. The research/advanced tables are intentionally untouched. */
+#financeSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 4px 0 18px;
+}
+
+#financeSummary .metric {
+  position: relative;
+  min-height: 112px;
+  overflow: hidden;
+  border: 1px solid rgba(8, 115, 95, .16);
+  border-radius: 16px;
+  padding: 18px;
+  background: linear-gradient(145deg, #ffffff 0%, #f5fbf8 100%);
+  box-shadow: 0 8px 24px rgba(21, 61, 51, .08);
+}
+
+#financeSummary .metric::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: linear-gradient(180deg, #0e8a70, #51b99f);
+}
+
+#financeSummary .metric span {
+  display: block;
+  color: #60736d;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+#financeSummary .metric b {
+  display: block;
+  margin-top: 10px;
+  color: #12362f;
+  font-size: clamp(19px, 2vw, 26px);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.gf-finance-table-wrap {
+  max-height: 620px;
+  border: 0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(27, 51, 44, .11), 0 0 0 1px rgba(40, 91, 76, .1);
+}
+
+#financeTable {
+  min-width: 980px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+#financeTable th {
+  padding: 13px 12px;
+  border: 0;
+  background: #173f36;
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: .035em;
+}
+
+#financeTable td {
+  padding: 12px;
+  border-bottom: 1px solid #e7efec;
+  color: #29433c;
+}
+
+#financeTable tbody tr:nth-child(even):not(.active-row):not(.force-row) td {
+  background: #f7faf9;
+}
+
+#financeTable tbody tr:hover td {
+  background: #edf7f3;
+}
+
+#financeTable .active-row td {
+  background: #eef9f4;
+}
+
+#financeTable .force-row td {
+  background: #fff0ed;
+}
+
+#financeTable td.status-active,
+#financeTable td.status-surrendered {
+  font-weight: 900;
+}
+
+.gf-age-limit-note {
+  margin: 10px 3px 0;
+  color: #667a74;
+  font-size: 12px;
+  text-align: right;
+}
+
+@media (max-width: 980px) {
+  #financeSummary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+  #financeSummary { grid-template-columns: 1fr; gap: 10px; }
+  #financeSummary .metric { min-height: 0; padding: 15px 16px; }
+  #financeSummary .metric b { margin-top: 6px; font-size: 21px; }
+
+  .gf-finance-table-wrap {
+    max-height: none;
+    overflow: visible;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  #financeTable,
+  #financeTable tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  #financeTable thead { display: none; }
+  #financeTable tbody { display: grid; gap: 12px; }
+
+  #financeTable tbody tr,
+  #financeTable tbody tr.active-row,
+  #financeTable tbody tr.force-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+    border: 1px solid #d7e5df;
+    border-left: 5px solid #77968d;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 6px 18px rgba(30, 61, 52, .08);
+  }
+
+  #financeTable tbody tr.active-row { border-left-color: #0e8a70; }
+  #financeTable tbody tr.force-row { border-left-color: #b43428; }
+
+  #financeTable tbody td,
+  #financeTable tbody tr:nth-child(even):not(.active-row):not(.force-row) td,
+  #financeTable tbody tr:hover td,
+  #financeTable tbody tr.active-row td,
+  #financeTable tbody tr.force-row td {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    border: 0;
+    border-bottom: 1px solid #edf2f0;
+    background: transparent;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  #financeTable tbody td::before {
+    content: attr(data-label);
+    color: #71827d;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .04em;
+  }
+
+  #financeTable tbody td:last-child { grid-column: 1 / -1; }
+  .gf-age-limit-note { text-align: left; }
+}
