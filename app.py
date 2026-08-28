@@ -2265,8 +2265,8 @@ def gf_model_tool():
     if not os.path.exists(GF_MODEL_PAGE_PATH):
         return (
             '<!doctype html><html lang="zh-TW"><head><meta charset="utf-8">'
-            '<title>GF 提款規律研究</title></head><body>'
-            '<h1>GF 提款規律研究工具未安裝</h1>'
+            '<title>GF 醫療融資</title></head><body>'
+            '<h1>GF 醫療融資工具未安裝</h1>'
             '<p>請先把 gf_withdrawal_model.html 放到 AIAtools/research/。</p>'
             '</body></html>',
             404,
@@ -2274,6 +2274,8 @@ def gf_model_tool():
         )
     with open(GF_MODEL_PAGE_PATH, 'r', encoding='utf-8') as model_page:
         html = model_page.read()
+    html = html.replace('<title>GF 醫療融資反推系統</title>', '<title>GF 醫療融資</title>')
+    html = html.replace('<h1>GF 醫療融資反推系統</h1>', '<h1>GF 醫療融資</h1>')
     minimum_basic_patch_tag = (
         f'<script src="/tools/gf-model-minimum-basic-patch.js?v={GF_MODEL_ASSET_VERSION}"></script>'
     )
