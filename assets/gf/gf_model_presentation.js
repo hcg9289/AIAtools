@@ -74,26 +74,80 @@
       display.surrendered ? `第 ${display.surrenderYear} 年退保` : '保單持續',
       '截至 99 歲狀態',
     );
+    const title = document.createElement('div');
+    title.className = 'gf-summary-title';
+    title.textContent = '建議摘要';
+    summary.prepend(title);
+    summary.setAttribute('role', 'table');
+    summary.querySelectorAll('.metric').forEach((metric) => metric.setAttribute('role', 'row'));
     summary.dataset.presentationVersion = PRESENTATION_VERSION;
     summary.dataset.maximumAge = String(MAX_DISPLAY_AGE);
+  }
+
+  function buildGroupedHeader(table) {
+    const thead = table.querySelector('thead');
+    const originalHeaders = Array.from(thead?.querySelectorAll('th') || []).map((cell) => cell.textContent.trim());
+    if (!thead || originalHeaders.length < 7) return;
+
+    const fixedLabels = originalHeaders.slice(0, 5);
+    const valueLabels = originalHeaders.slice(5, -1);
+    const statusLabel = originalHeaders.at(-1);
+    const groupRow = document.createElement('tr');
+    const labelRow = document.createElement('tr');
+
+    fixedLabels.forEach((label, index) => {
+      const header = document.createElement('th');
+      header.textContent = label;
+      header.rowSpan = 2;
+      header.scope = 'col';
+      if (index === 0) header.className = 'gf-sticky-age';
+      if (index === 1) header.className = 'gf-sticky-year';
+      groupRow.append(header);
+    });
+
+    const valueGroup = document.createElement('th');
+    valueGroup.textContent = '現金提取後之保單價值';
+    valueGroup.colSpan = valueLabels.length;
+    valueGroup.scope = 'colgroup';
+    valueGroup.className = 'gf-value-group';
+    groupRow.append(valueGroup);
+
+    const status = document.createElement('th');
+    status.textContent = statusLabel;
+    status.rowSpan = 2;
+    status.scope = 'col';
+    groupRow.append(status);
+
+    valueLabels.forEach((label) => {
+      const header = document.createElement('th');
+      header.textContent = label === '提款後總額' ? '總額' : label;
+      header.scope = 'col';
+      labelRow.append(header);
+    });
+
+    thead.replaceChildren(groupRow, labelRow);
   }
 
   function enhanceTable() {
     const table = document.getElementById('financeTable');
     if (!table) return;
-    const headers = Array.from(table.querySelectorAll('thead th')).map((cell) => cell.textContent.trim());
+    buildGroupedHeader(table);
     table.querySelectorAll('tbody tr').forEach((row) => {
       const age = Number(row.cells[0]?.textContent.replace(/,/g, '').trim());
       if (Number.isFinite(age) && age > MAX_DISPLAY_AGE) {
         row.remove();
         return;
       }
-      Array.from(row.cells).forEach((cell, index) => {
-        cell.dataset.label = headers[index] || '';
-      });
+      row.cells[0]?.classList.add('gf-sticky-age');
+      row.cells[1]?.classList.add('gf-sticky-year');
+      const policyYear = Number(row.cells[1]?.textContent.replace(/,/g, '').trim());
+      if (Number.isFinite(policyYear) && policyYear % 5 === 0) {
+        row.classList.add('gf-five-year-divider');
+      }
     });
     table.dataset.presentationVersion = PRESENTATION_VERSION;
     table.dataset.maximumAge = String(MAX_DISPLAY_AGE);
+    table.setAttribute('aria-label', 'GF 醫療融資逐年建議表');
     table.closest('.tableWrap')?.classList.add('gf-finance-table-wrap');
 
     const notice = document.getElementById('financeAgeLimitNote') || document.createElement('p');
@@ -139,5 +193,6 @@
     MAX_DISPLAY_AGE,
     visibleRows,
     visibleResult,
+    buildGroupedHeader,
   });
 })();

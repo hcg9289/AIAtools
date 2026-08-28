@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PAGE = ROOT / "gf_presentation_patch_harness.html"
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-EXPECTED_TESTS = 5
+EXPECTED_TESTS = 6
 
 
 def main() -> None:
@@ -31,6 +31,7 @@ def main() -> None:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-background-networking",
+                "--window-size=390,1000",
                 "--virtual-time-budget=1000",
                 f"--user-data-dir={profile}",
                 "--allow-file-access-from-files",

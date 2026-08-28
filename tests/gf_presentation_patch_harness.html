@@ -25,12 +25,16 @@
       metric(summary, '實際累計提款', 'USD ' + result.actualTotal);
       metric(summary, '最終狀態', result.surrendered ? '退保' : '保單持續');
       const table = document.getElementById('financeTable'); clearElement(table);
-      table.innerHTML = '<thead><tr><th>年齡</th><th>保單年度</th><th>醫療保費</th><th>累計提款</th><th>狀態</th></tr></thead>';
+      table.innerHTML = '<thead><tr><th>年齡</th><th>保單年度</th><th>醫療保費</th><th>實際提款</th><th>累計提款</th><th>保證現金價值</th><th>復歸紅利</th><th>終期紅利</th><th>提款後總額</th><th>狀態</th></tr></thead>';
       const tbody = document.createElement('tbody');
       result.rows.forEach((item) => {
         const row = document.createElement('tr');
         if (item.requested_withdrawal) row.className = 'active-row';
-        [item.age, item.policy_year, item.requested_withdrawal, item.cumulative_withdrawal, item.status].forEach((value) => {
+        [
+          item.age, item.policy_year, item.requested_withdrawal, item.withdrawal_total,
+          item.cumulative_withdrawal, item.post_guaranteed_cash, item.post_reversionary_bonus,
+          item.post_terminal_bonus, item.post_surrender_total, item.status,
+        ].forEach((value) => {
           const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
         });
         tbody.append(row);
@@ -65,9 +69,9 @@
       surrendered: false,
       surrenderYear: null,
       rows: [
-        { age: 98, policy_year: 70, requested_withdrawal: 1000, withdrawal_total: 1000, cumulative_withdrawal: 1000, status: '已提款' },
-        { age: 99, policy_year: 71, requested_withdrawal: 2000, withdrawal_total: 2000, cumulative_withdrawal: 3000, status: '已提款' },
-        { age: 100, policy_year: 72, requested_withdrawal: 3000, withdrawal_total: 3000, cumulative_withdrawal: 6000, status: '已提款' },
+        { age: 98, policy_year: 70, requested_withdrawal: 1000, withdrawal_total: 1000, cumulative_withdrawal: 1000, post_guaranteed_cash: 100, post_reversionary_bonus: 200, post_terminal_bonus: 300, post_surrender_total: 600, status: '已提款' },
+        { age: 99, policy_year: 71, requested_withdrawal: 2000, withdrawal_total: 2000, cumulative_withdrawal: 3000, post_guaranteed_cash: 110, post_reversionary_bonus: 210, post_terminal_bonus: 310, post_surrender_total: 630, status: '已提款' },
+        { age: 100, policy_year: 72, requested_withdrawal: 3000, withdrawal_total: 3000, cumulative_withdrawal: 6000, post_guaranteed_cash: 120, post_reversionary_bonus: 220, post_terminal_bonus: 320, post_surrender_total: 660, status: '已提款' },
       ],
     };
     const originalSnapshot = JSON.stringify(result);
@@ -91,6 +95,12 @@
       assert(cards['醫療保費總額'] === 'USD 3,000', `醫療總額錯誤：${cards['醫療保費總額']}`);
       assert(cards['實際累計提款'] === 'USD 3,000', `實際提款錯誤：${cards['實際累計提款']}`);
       assert(cards['截至 99 歲狀態'] === '保單持續', '狀態卡沒有清楚標示99歲範圍');
+      assert(document.querySelector('#financeSummary > .gf-summary-title')?.textContent === '建議摘要', '摘要欠缺共同表題');
+      const summaryStyle = getComputedStyle(document.getElementById('financeSummary'));
+      const metricStyle = getComputedStyle(document.querySelector('#financeSummary .metric'));
+      assert(summaryStyle.borderTopStyle === 'solid' && metricStyle.boxShadow === 'none', '摘要仍是獨立浮動卡片');
+      const firstValue = document.querySelector('#financeSummary .metric b');
+      assert(firstValue.textContent === 'USD 4,000' && firstValue.getBoundingClientRect().right <= document.documentElement.clientWidth, `摘要數值超出手機畫面：${firstValue.getBoundingClientRect().right}/${document.documentElement.clientWidth}`);
     });
 
     test('醫療融資CSV與UI同樣截止99歲', () => {
@@ -107,11 +117,29 @@
       assert(result.rows.length === 3 && result.actualTotal === 6000, '引擎數值被截斷');
     });
 
-    test('手機卡片具備欄位標籤', () => {
-      const labels = Array.from(document.querySelectorAll('#financeTable tbody tr:first-child td')).map((cell) => cell.dataset.label);
-      assert(labels.join('|') === '年齡|保單年度|醫療保費|累計提款|狀態', `欄位標籤錯誤：${labels}`);
+    test('建議書式兩層分組表頭', () => {
+      const rows = document.querySelectorAll('#financeTable thead tr');
+      const group = document.querySelector('#financeTable thead .gf-value-group');
+      assert(rows.length === 2, `表頭不是兩層：${rows.length}`);
+      assert(group?.textContent === '現金提取後之保單價值' && group.colSpan === 4, '組件模式分組表頭或colspan錯誤');
+      assert(Array.from(rows[1].cells).map((cell) => cell.textContent).join('|') === '保證現金價值|復歸紅利|終期紅利|總額', '第二層價值欄錯誤');
+
+      const totalTable = document.createElement('table');
+      totalTable.innerHTML = '<thead><tr><th>年齡</th><th>保單年度</th><th>醫療保費</th><th>實際提款</th><th>累計提款</th><th>提款後總額</th><th>狀態</th></tr></thead>';
+      GFPresentationPatch.buildGroupedHeader(totalTable);
+      assert(totalTable.querySelector('.gf-value-group')?.colSpan === 1, '總額模式分組表頭colspan錯誤');
+      assert(totalTable.querySelector('thead tr:nth-child(2) th')?.textContent === '總額', '總額模式第二層欄名錯誤');
+    });
+
+    test('所有尺寸維持連續表格及固定首兩欄', () => {
+      const firstRow = document.querySelector('#financeTable tbody tr');
       assert(document.querySelector('.tableWrap').classList.contains('gf-finance-table-wrap'), '結果表未套用專用樣式類別');
-      assert(getComputedStyle(document.querySelector('#financeSummary .metric')).borderRadius === '16px', '外部CSS未載入');
+      assert(getComputedStyle(document.getElementById('financeTable')).display === 'table', '表格被轉成block/card');
+      assert(getComputedStyle(firstRow).display === 'table-row', '年度列被轉成卡片');
+      assert(firstRow.cells[0].classList.contains('gf-sticky-age') && firstRow.cells[1].classList.contains('gf-sticky-year'), '首兩欄沒有sticky類別');
+      assert(getComputedStyle(firstRow.cells[0]).position === 'sticky' && getComputedStyle(firstRow.cells[1]).position === 'sticky', '首兩欄CSS不是sticky');
+      assert(firstRow.classList.contains('gf-five-year-divider'), '第70保單年度欠缺五年分隔線');
+      assert(!firstRow.cells[0].dataset.label, '仍殘留手機卡片data-label');
     });
 
     const report = document.createElement('pre');
