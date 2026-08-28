@@ -69,7 +69,7 @@ GF_MODEL_PAGE_PATH = os.environ.get(
     'GF_MODEL_PAGE_PATH',
     os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
 )
-GF_MODEL_ASSET_VERSION = '20260829-2'
+GF_MODEL_ASSET_VERSION = '20260829-3'
 GF_WITHDRAWAL_TARGET_YEAR = 20
 GF_OCR_ZOOM = float(os.environ.get('GF_OCR_ZOOM', '4.0'))
 GF_OCR_LANG = os.environ.get('GF_OCR_LANG', 'eng')

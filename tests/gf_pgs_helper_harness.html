@@ -13,29 +13,23 @@
     const results=[];
     function test(name,fn){try{fn();results.push('PASS '+name)}catch(error){results.push('FAIL '+name+': '+error.message)}}
     function assert(condition,message){if(!condition)throw new Error(message)}
-    test('介面和加入書籤按鈕存在',()=>{
+    test('介面和可拖曳書籤存在',()=>{
       assert(document.getElementById('pgsCopy'),'欠缺複製按鈕');
-      assert(document.getElementById('pgsInstall'),'欠缺加入書籤按鈕');
-      assert(!document.getElementById('pgsBookmarklet'),'仍顯示需拖曳的書籤連結');
-      assert(document.getElementById('pgsInstallPanel').hidden,'安裝說明不應預先展開');
+      const bookmarklet=document.getElementById('pgsBookmarklet');
+      assert(bookmarklet,'欠缺可拖曳的書籤連結');
+      assert(bookmarklet.draggable,'書籤連結不可拖曳');
+      assert(bookmarklet.getAttribute('href')===GFPgsHelper.BOOKMARKLET_CODE,'書籤連結沒有一鍵填入程式');
       assert(document.getElementById('pgsCopy').disabled,'未計算時按鈕應停用');
     });
-    test('加入書籤流程誠實顯示限制及手動步驟',()=>{
-      assert(GFPgsHelper.requestBookmarkInstall.toString().includes('window.confirm'),'加入書籤前沒有確認');
-      assert(document.getElementById('pgsInstall').textContent==='設定 PGS 一鍵填入','按鈕名稱沒有清楚說明用途');
-      let confirmationMessage='';
-      const originalConfirm=window.confirm;
-      window.confirm=message=>{confirmationMessage=message;return false};
-      document.getElementById('pgsInstall').click();
-      window.confirm=originalConfirm;
-      assert(confirmationMessage.includes('是否加入「PGS 一鍵填入」書籤？'),'點擊按鈕沒有顯示加入書籤詢問');
-      GFPgsHelper.revealInstallGuide();
-      const panel=document.getElementById('pgsInstallPanel');
-      const code=document.getElementById('pgsBookmarkletCode');
-      assert(!panel.hidden,'確認後未顯示安裝步驟');
-      assert(panel.textContent.includes('普通網頁直接改動你的書籤')&&panel.textContent.includes('新增網頁')&&panel.textContent.includes('Command + D'),'欠缺Chrome或Safari清楚步驟');
-      assert(code.value===GFPgsHelper.BOOKMARKLET_CODE&&code.value.startsWith('javascript:'),'沒有提供可複製書籤程式');
-      assert(!/已成功加入|加入成功/.test(panel.textContent),'介面顯示虛假成功');
+    test('拖曳說明清楚且誤點會提示',()=>{
+      const setup=document.querySelector('.pgs-bookmark-setup');
+      assert(setup.textContent.includes('請勿直接點擊')&&setup.textContent.includes('按住')&&setup.textContent.includes('拖到')&&setup.textContent.includes('書籤列')&&setup.textContent.includes('放開'),'拖曳步驟不清楚');
+      let alertMessage='';
+      const originalAlert=window.alert;
+      window.alert=message=>{alertMessage=message};
+      document.getElementById('pgsBookmarklet').click();
+      window.alert=originalAlert;
+      assert(alertMessage.includes('不是直接點擊')&&alertMessage.includes('拖到瀏覽器最上方的書籤列'),'誤點時沒有清楚提示');
     });
     test('按原定提款排程映射72年',()=>{
       const payload=JSON.parse(GFPgsHelper.buildPayload({schedule:{1:101,6:606,72:7272}}));

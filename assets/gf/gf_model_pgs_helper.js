@@ -92,63 +92,29 @@
     }
   }
 
-  function revealInstallGuide() {
-    const panel = document.getElementById('pgsInstallPanel');
-    const code = document.getElementById('pgsBookmarkletCode');
-    if (panel) panel.hidden = false;
-    if (code) code.value = BOOKMARKLET_CODE;
-  }
-
-  async function copyBookmarkletCode() {
-    const code = document.getElementById('pgsBookmarkletCode');
-    if (!code) return false;
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
-      await navigator.clipboard.writeText(BOOKMARKLET_CODE);
-      setStatus('書籤程式已複製，但尚未加入瀏覽器；請完成下方步驟。');
-      return true;
-    } catch (_) {
-      code.focus();
-      code.select();
-      setStatus('瀏覽器未能自動複製。書籤程式已選取，請按 Command + C 或 Ctrl + C；此時仍未加入書籤。', true);
-      return false;
-    }
-  }
-
-  async function requestBookmarkInstall() {
-    const confirmed = window.confirm('是否加入「PGS 一鍵填入」書籤？\n\n按「確定」後，本頁會複製書籤程式並顯示一次性的加入步驟。基於 Chrome／Safari 的安全限制，普通網頁不能直接新增或修改你的書籤，因此完成步驟前仍未加入。');
-    if (!confirmed) return false;
-    revealInstallGuide();
-    await copyBookmarkletCode();
-    return true;
-  }
-
   function installUi() {
     if (document.getElementById('pgsTools')) return;
     const table = document.getElementById('financeTable');
     if (!table) return;
 
     const style = document.createElement('style');
-    style.textContent = '.pgs-tools{margin-top:16px;padding:16px;border:1px solid #b9d4c7;border-radius:10px;background:#eef8f3}.pgs-tools h3{margin:0 0 8px}.pgs-tools ol{margin:12px 0 0;padding-left:22px}.pgs-tools li+li{margin-top:5px}.pgs-install-panel{margin-top:14px;padding:14px;border:1px solid #cdbfaa;border-radius:8px;background:#fffdf8}.pgs-install-panel[hidden]{display:none!important}.pgs-install-panel h4{margin:12px 0 5px}.pgs-install-warning{margin:0;padding:10px;border-left:4px solid #bd7b18;background:#fff4d8;color:#6b4815}.pgs-code{width:100%;min-height:90px;margin-top:10px;resize:vertical;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.pgs-status{min-height:1.55em;margin-top:9px;font-size:13px;color:#285449}@media(max-width:620px){.pgs-tools .toolbar>*{width:100%;text-align:center}}';
+    style.textContent = '.pgs-tools{margin-top:16px;padding:16px;border:1px solid #b9d4c7;border-radius:10px;background:#eef8f3}.pgs-tools h3{margin:0 0 8px}.pgs-tools ol{margin:12px 0 0;padding-left:22px}.pgs-tools li+li{margin-top:5px}.pgs-bookmark-setup{margin-top:14px;padding:14px;border:2px solid #bd7b18;border-radius:10px;background:#fffaf0}.pgs-bookmark-setup h4{margin:0 0 8px;color:#6b4815}.pgs-drag-warning{margin:0 0 12px;font-weight:700;color:#9b341c}.pgs-bookmarklet{display:inline-block;padding:11px 18px;border-radius:9px;background:#176b57;color:#fff!important;font-weight:800;text-decoration:none;cursor:grab;box-shadow:0 2px 5px rgba(0,0,0,.16)}.pgs-bookmarklet:active{cursor:grabbing}.pgs-bookmark-help{margin:10px 0 0;color:#5b5142;font-size:13px}.pgs-status{min-height:1.55em;margin-top:9px;font-size:13px;color:#285449}@media(max-width:620px){.pgs-tools .toolbar>*{width:100%;text-align:center}.pgs-bookmarklet{display:block;text-align:center}}';
     document.head.appendChild(style);
 
     const section = document.createElement('section');
     section.className = 'pgs-tools';
     section.id = 'pgsTools';
     section.setAttribute('aria-labelledby', 'pgsToolsTitle');
-    section.innerHTML = '<h3 id="pgsToolsTitle">填入 AIA PGS 提款設定</h3><div class="hint">工具會複製第 1–72 保單年度的原定提款排程；不會把年齡當作保單年度，也不會代你按 PGS 的「計算及儲存」。</div><div class="toolbar"><button class="primary" id="pgsCopy" type="button" disabled>複製 PGS 提款資料</button><button class="secondary" id="pgsInstall" type="button">設定 PGS 一鍵填入</button></div><div class="pgs-install-panel" id="pgsInstallPanel" hidden><p class="pgs-install-warning"><strong>尚未加入：</strong>Chrome 和 Safari 不允許普通網頁直接改動你的書籤。下列設定只需在每部電腦完成一次。</p><h4>Chrome／Edge</h4><ol><li>Mac 按 <strong>Command + Shift + B</strong>；Windows 按 <strong>Ctrl + Shift + B</strong>，顯示書籤列。</li><li>在書籤列空白位置按右鍵，選擇「新增網頁／Add page」。</li><li>名稱輸入「PGS 一鍵填入」，網址貼上已複製的書籤程式，然後儲存。</li></ol><h4>Safari（Mac）</h4><ol><li>先按 <strong>Command + D</strong> 建立一個書籤，再開啟「書籤」→「編輯書籤」。</li><li>把名稱改成「PGS 一鍵填入」，並把網址改為已複製的書籤程式。若你的 Safari 版本阻止 JavaScript 書籤，請改用 Chrome。</li></ol><textarea class="pgs-code" id="pgsBookmarkletCode" readonly aria-label="PGS 書籤程式"></textarea><div class="toolbar"><button class="secondary" id="pgsCopyBookmarklet" type="button">再次複製書籤程式</button><button class="secondary" id="pgsCloseInstall" type="button">關閉說明</button></div></div><ol><li>每次先在本頁完成計算，按「複製 PGS 提款資料」。</li><li>轉到 PGS「進階設定」頁，點書籤列的「PGS 一鍵填入」。若瀏覽器拒絕讀取剪貼簿，按提示手動貼上。</li><li>核對逐年金額後，由你親自按 PGS 的「計算及儲存」。</li></ol><div class="pgs-status" id="pgsStatus" role="status">請先完成反推計算。</div>';
+    section.innerHTML = '<h3 id="pgsToolsTitle">填入 AIA PGS 提款設定</h3><div class="hint">工具會複製第 1–72 保單年度的原定提款排程；不會把年齡當作保單年度，也不會代你按 PGS 的「計算及儲存」。</div><div class="toolbar"><button class="primary" id="pgsCopy" type="button" disabled>複製 PGS 提款資料</button></div><div class="pgs-bookmark-setup"><h4>首次設定：把一鍵填入工具加入書籤列</h4><p class="pgs-drag-warning">請勿直接點擊下方按鈕。請用滑鼠按住它，拖到瀏覽器最上方的書籤列，再放開滑鼠。</p><a class="pgs-bookmarklet" id="pgsBookmarklet" draggable="true" href="#" title="按住並拖到瀏覽器書籤列">PGS 一鍵填入｜按住拖到書籤列</a><p class="pgs-bookmark-help">看不到書籤列？Chrome／Edge：Mac 按 Command + Shift + B；Windows 按 Ctrl + Shift + B。這項設定每部電腦只需完成一次。</p></div><ol><li>先把上方「PGS 一鍵填入」拖到瀏覽器書籤列。</li><li>每次在本頁完成計算後，按「複製 PGS 提款資料」。</li><li>轉到 PGS「進階設定」頁，再點書籤列內的「PGS 一鍵填入」。</li><li>核對逐年金額後，由你親自按 PGS 的「計算及儲存」。</li></ol><div class="pgs-status" id="pgsStatus" role="status">請先完成反推計算。</div>';
     table.closest('.tableWrap')?.after(section);
 
     const copyButton = document.getElementById('pgsCopy');
-    const installButton = document.getElementById('pgsInstall');
-    const copyBookmarkletButton = document.getElementById('pgsCopyBookmarklet');
-    const closeInstallButton = document.getElementById('pgsCloseInstall');
+    const bookmarklet = document.getElementById('pgsBookmarklet');
     copyButton?.addEventListener('click', copyData);
-    installButton?.addEventListener('click', requestBookmarkInstall);
-    copyBookmarkletButton?.addEventListener('click', copyBookmarkletCode);
-    closeInstallButton?.addEventListener('click', () => {
-      const panel = document.getElementById('pgsInstallPanel');
-      if (panel) panel.hidden = true;
+    bookmarklet?.setAttribute('href', BOOKMARKLET_CODE);
+    bookmarklet?.addEventListener('click', (event) => {
+      event.preventDefault();
+      window.alert('這個按鈕不是直接點擊使用。請用滑鼠按住它，拖到瀏覽器最上方的書籤列，再放開滑鼠。加入後，才在 PGS 頁面點擊書籤列內的「PGS 一鍵填入」。');
     });
   }
 
@@ -174,9 +140,6 @@
   window.GFPgsHelper = {
     BOOKMARKLET_CODE,
     buildPayload,
-    copyBookmarkletCode,
-    requestBookmarkInstall,
-    revealInstallGuide,
     validatePayload,
   };
 })();
