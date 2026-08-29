@@ -221,9 +221,67 @@
     if (note) note.hidden = !visible;
   }
 
+  function setPdfDownloadEnabled(enabled) {
+    const button = document.getElementById('financePdfDownload');
+    if (button) button.disabled = !enabled;
+  }
+
+  async function downloadMedicalFinancingPdf() {
+    if (!currentFinanceResult) return;
+    const button = document.getElementById('financePdfDownload');
+    const originalLabel = button?.textContent || '下載 PDF';
+    if (button) {
+      button.disabled = true;
+      button.textContent = '製作 PDF…';
+    }
+    try {
+      const response = await fetch('/api/gf/medical-financing-pdf', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/pdf' },
+        body: JSON.stringify({
+          result: visibleResult(currentFinanceResult),
+          medicalContext: currentMedicalContext || { source: 'manual' },
+        }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `PDF 製作失敗（${response.status}）`);
+      }
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'gf_medical_financing_proposal.pdf';
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (button) {
+        button.textContent = originalLabel;
+        button.disabled = !currentFinanceResult;
+      }
+    }
+  }
+
+  function installPdfDownloadButton() {
+    if (document.getElementById('financePdfDownload')) return;
+    const csvButton = document.getElementById('financeDownload');
+    if (!csvButton) return;
+    const button = document.createElement('button');
+    button.id = 'financePdfDownload';
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = '下載 PDF';
+    button.disabled = true;
+    button.addEventListener('click', downloadMedicalFinancingPdf);
+    csvButton.after(button);
+  }
+
   function patchedInvalidateFinanceResult(...args) {
     const value = originalInvalidateFinanceResult.apply(this, args);
     setResultsVisible(false);
+    setPdfDownloadEnabled(false);
     return value;
   }
 
@@ -233,6 +291,7 @@
     enhanceNotice(result);
     enhanceTable();
     setResultsVisible(true);
+    setPdfDownloadEnabled(true);
     return value;
   }
 
@@ -268,9 +327,11 @@
     visibleResult,
     buildGroupedHeader,
     enhanceNotice,
+    installPdfDownloadButton,
     installColumnWidths,
     normalizeProposalColumns,
   });
 
+  installPdfDownloadButton();
   setResultsVisible(false);
 })();

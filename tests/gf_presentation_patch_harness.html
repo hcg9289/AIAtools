@@ -8,6 +8,7 @@
 <body>
   <div id="financeSummary" class="summary"></div>
   <div id="financeNotice" class="notice">舊有研究說明</div>
+  <button id="financeDownload" type="button" disabled>下載 CSV</button>
   <div class="tableWrap"><table id="financeTable" class="dataTable finance-table"></table></div>
   <script>
     let currentFinanceResult = null;
@@ -95,6 +96,8 @@
     test('首次進入不預先顯示結果', () => {
       assert(initiallyHidden, '補丁載入後仍預先顯示摘要或列表');
       assert(!document.getElementById('financeSummary').hidden && !document.querySelector('.tableWrap').hidden, '計算後沒有顯示結果');
+      assert(document.getElementById('financePdfDownload')?.textContent === '下載 PDF', '欠缺下載 PDF 按鈕');
+      assert(!document.getElementById('financePdfDownload').disabled, '計算完成後 PDF 按鈕沒有啟用');
     });
 
     test('99歲保留而100歲從UI移除', () => {
@@ -171,6 +174,7 @@
     test('輸入變更後隱藏舊結果', () => {
       invalidateFinanceResult();
       assert(document.getElementById('financeSummary').hidden && document.querySelector('.tableWrap').hidden, '輸入變更後舊結果仍顯示');
+      assert(document.getElementById('financePdfDownload').disabled, '輸入變更後 PDF 按鈕仍可下載舊結果');
     });
 
     renderFinanceResult(result);

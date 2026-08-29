@@ -27,6 +27,7 @@ from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from dotenv import load_dotenv
+from gf_medical_pdf import PdfPayloadError, build_medical_financing_pdf
 
 load_dotenv()
 
@@ -69,7 +70,7 @@ GF_MODEL_PAGE_PATH = os.environ.get(
     'GF_MODEL_PAGE_PATH',
     os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
 )
-GF_MODEL_ASSET_VERSION = '20260829-6'
+GF_MODEL_ASSET_VERSION = '20260829-7'
 GF_WITHDRAWAL_TARGET_YEAR = 20
 GF_OCR_ZOOM = float(os.environ.get('GF_OCR_ZOOM', '4.0'))
 GF_OCR_LANG = os.environ.get('GF_OCR_LANG', 'eng')
@@ -2353,6 +2354,26 @@ def gf_model_pgs_helper():
     response = send_file(
         os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_pgs_helper.js'),
         mimetype='application/javascript',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/api/gf/medical-financing-pdf', methods=['POST'])
+def download_gf_medical_financing_pdf():
+    if request.content_length and request.content_length > 1024 * 1024:
+        return jsonify({'error': 'PDF 資料不可超過 1MB。'}), 413
+    payload = request.get_json(silent=True)
+    try:
+        document = build_medical_financing_pdf(payload)
+    except PdfPayloadError as exc:
+        return jsonify({'error': str(exc)}), 400
+    response = send_file(
+        document,
+        as_attachment=True,
+        download_name='gf_medical_financing_proposal.pdf',
+        mimetype='application/pdf',
+        max_age=0,
     )
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
