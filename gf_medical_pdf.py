@@ -140,6 +140,21 @@ def validate_medical_financing_payload(payload):
         "deductibleLabel": _text(raw_context.get("deductibleLabel"), "自付費", fallback="自訂自付費"),
         "effectiveDate": _text(raw_context.get("effectiveDate"), "保費表日期", maximum=24, fallback="未提供"),
     }
+    premium_by_age = {}
+    if context["source"].lower() == "table":
+        raw_rates = raw_context.get("premiumByAge")
+        if not isinstance(raw_rates, list) or len(raw_rates) != 100:
+            raise PdfPayloadError("欠缺 0 至 99 歲的完整官方醫療保費率。")
+        for index, raw_rate in enumerate(raw_rates):
+            if not isinstance(raw_rate, dict):
+                raise PdfPayloadError(f"第 {index + 1} 項官方醫療保費率格式不正確。")
+            age = _integer(raw_rate.get("age"), f"第 {index + 1} 項保費年齡", maximum=99)
+            if age in premium_by_age:
+                raise PdfPayloadError("官方醫療保費率年齡不可重複。")
+            premium_by_age[age] = _number(raw_rate.get("premium"), f"{age} 歲官方醫療保費", minimum=0.01)
+        if set(premium_by_age) != set(range(100)):
+            raise PdfPayloadError("官方醫療保費率必須完整涵蓋 0 至 99 歲。")
+    context["premiumByAge"] = premium_by_age
     return {
         "input": {"issueAge": issue_age, "annual": annual, "total": total, "basic": basic},
         "rows": rows,
@@ -293,7 +308,7 @@ def _official_premium_page_indices(context):
     return (first_page, first_page + 1)
 
 
-def _insert_official_premium_pages(generated_pdf, premium_page_indices, projection_pages):
+def _insert_official_premium_pages(generated_pdf, premium_page_indices):
     generated = PdfReader(generated_pdf)
     if not premium_page_indices:
         generated_pdf.seek(0)
@@ -310,10 +325,8 @@ def _insert_official_premium_pages(generated_pdf, premium_page_indices, projecti
         "/Title": "GF 醫療融資方案",
         "/Author": "AIAtools",
     })
-    for page in generated.pages[:projection_pages]:
-        writer.add_page(page)
     writer.append(official, pages=list(premium_page_indices), import_outline=False)
-    for page in generated.pages[projection_pages:]:
+    for page in generated.pages:
         writer.add_page(page)
 
     output = io.BytesIO()
@@ -327,19 +340,29 @@ def _value_at_age(rows, age, field):
     return candidates[-1][field] if candidates else 0
 
 
-def _medical_paid_to_age(rows, age):
-    return sum(row["requested_withdrawal"] for row in rows if row["age"] <= age)
+def _premium_at_age(data, age):
+    official_rate = data["context"]["premiumByAge"].get(age)
+    if official_rate is not None:
+        return official_rate
+    row = next((item for item in data["rows"] if item["age"] == age), None)
+    return row["requested_withdrawal"] if row else 0
+
+
+def _medical_paid_to_age(data, age):
+    issue_age = data["input"]["issueAge"]
+    return sum(_premium_at_age(data, premium_age) for premium_age in range(issue_age + 1, age + 1))
 
 
 def _combo_paid_to_age(data, age):
     issue_age = data["input"]["issueAge"]
     completed_years = max(0, min(5, age - issue_age))
     gf_paid = data["input"]["annual"] * completed_years
-    uncovered = sum(
-        max(0, row["requested_withdrawal"] - row["withdrawal_total"])
-        for row in data["rows"] if row["age"] <= age
+    medical_paid = _medical_paid_to_age(data, age)
+    financed_medical = sum(
+        min(_premium_at_age(data, row["age"]), row["withdrawal_total"])
+        for row in data["rows"] if row["age"] <= age and row["requested_withdrawal"] > 0
     )
-    return gf_paid + uncovered
+    return gf_paid + max(0, medical_paid - financed_medical)
 
 
 def _milestone_ages(issue_age, first_standard_age):
@@ -353,8 +376,7 @@ def _draw_summary_page(c, data, page_no, total_pages):
     width, height = page_size
     issue_age = data["input"]["issueAge"]
     context = data["context"]
-    medical_rows = _premium_rows(data)
-    first_medical = medical_rows[0]["requested_withdrawal"] if medical_rows else 0
+    first_medical = _premium_at_age(data, min(99, issue_age + 1))
     plan_label = f"{context['formName']} ({context['deductibleLabel']})"
     _page_header(c, page_size, f"{issue_age} 歲 · 醫療融資方案", context["planName"], page_no, total_pages)
 
@@ -371,7 +393,7 @@ def _draw_summary_page(c, data, page_no, total_pages):
     _cell_text(c, "組合計劃", x + widths[0] + widths[1], top - row_heights[0], widths[2], row_heights[0], size=10, bold=True)
     _cell_text(c, "內容", x, y, widths[0], row_heights[1], size=8, bold=True)
     _cell_text(c, plan_label, x + widths[0], y, widths[1], row_heights[1], size=8)
-    combo_label = f"每月 {_money(data['input']['annual'] / 12)} 儲蓄\n+\n{plan_label}"
+    combo_label = f"每年 {_money(data['input']['annual'])} 儲蓄\n+\n{plan_label}"
     _cell_text(c, combo_label, x + widths[0] + widths[1], y, widths[2], row_heights[1], size=7.5)
 
     coverage_height = 49 * mm
@@ -406,7 +428,7 @@ def _draw_summary_page(c, data, page_no, total_pages):
     for age in premium_ages:
         row_y -= premium_height
         _cell_text(c, f"至 {age} 歲", x, row_y, widths[0], premium_height, size=7.5)
-        _cell_text(c, _money(_medical_paid_to_age(data["rows"], age)), x + widths[0], row_y, widths[1], premium_height, size=7.5)
+        _cell_text(c, _money(_medical_paid_to_age(data, age)), x + widths[0], row_y, widths[1], premium_height, size=7.5)
         _cell_text(c, _money(_combo_paid_to_age(data, age)), x + widths[0] + widths[1], row_y, widths[2], premium_height, size=7.5, bold=True)
 
     cash_ages = _milestone_ages(issue_age, 30)
@@ -443,8 +465,8 @@ def build_medical_financing_pdf(payload):
     c = canvas.Canvas(output, pagesize=A4, pageCompression=1)
     c.setTitle("GF 醫療融資方案")
     c.setAuthor("AIAtools")
-    used = _draw_projection_pages(c, data, 1, total_pages)
+    used = _draw_projection_pages(c, data, len(premium_page_indices) + 1, total_pages)
     _draw_summary_page(c, data, used + len(premium_page_indices) + 1, total_pages)
     c.save()
     output.seek(0)
-    return _insert_official_premium_pages(output, premium_page_indices, projection_pages)
+    return _insert_official_premium_pages(output, premium_page_indices)

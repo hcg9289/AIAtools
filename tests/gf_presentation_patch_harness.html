@@ -57,6 +57,15 @@
     function simulateMedicalFinancing() { return { rows: [], modelVersion: 'fixture-v1' }; }
     function canFundMedicalSchedule() { return { funded: true, result: simulateMedicalFinancing() }; }
     function findMinimumAnnualPremium() { return { annual: 1, funded: true }; }
+    function medicalRowsFromTable(planId, formId, deductibleId, startAge, endAge) {
+      if (planId !== 'aia_avsw' || formId !== 'rider' || deductibleId !== '18000') {
+        throw new Error('fixture selection mismatch');
+      }
+      return Array.from({ length: endAge - startAge + 1 }, (_, index) => ({
+        age: startAge + index,
+        medicalPremium: 500 + startAge + index,
+      }));
+    }
     window.GFFinanceCore = {
       buildStateTransitionRows,
       simulateMedicalFinancing,
@@ -175,6 +184,21 @@
       invalidateFinanceResult();
       assert(document.getElementById('financeSummary').hidden && document.querySelector('.tableWrap').hidden, '輸入變更後舊結果仍顯示');
       assert(document.getElementById('financePdfDownload').disabled, '輸入變更後 PDF 按鈕仍可下載舊結果');
+    });
+
+    test('PDF攜帶完整官方醫療保費率', () => {
+      const context = GFPresentationPatch.buildMedicalContextForPdf({
+        source: 'table',
+        planId: 'aia_avsw',
+        formId: 'rider',
+        deductibleId: '18000',
+        planName: 'AIA 自願醫保睿選計劃',
+        formName: '附加契約',
+        deductibleLabel: 'HKD 18,000／USD 2,250',
+      });
+      assert(context.premiumByAge.length === 100, `官方保費率行數錯誤：${context.premiumByAge.length}`);
+      assert(context.premiumByAge[29].age === 29 && context.premiumByAge[29].premium === 529, '官方保費率年齡映射錯誤');
+      assert(GFPresentationPatch.buildMedicalContextForPdf({ source: 'manual' }).source === 'manual', '手動輸入被誤當官方表');
     });
 
     renderFinanceResult(result);

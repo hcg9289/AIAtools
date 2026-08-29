@@ -226,6 +226,23 @@
     if (button) button.disabled = !enabled;
   }
 
+  function buildMedicalContextForPdf(context) {
+    if (!context || context.source !== 'table') return { source: 'manual' };
+    if (typeof medicalRowsFromTable !== 'function') {
+      throw new Error('無法讀取所選計劃的官方醫療保費表。');
+    }
+    return {
+      ...context,
+      premiumByAge: medicalRowsFromTable(
+        context.planId,
+        context.formId,
+        context.deductibleId,
+        0,
+        99,
+      ).map((row) => ({ age: row.age, premium: row.medicalPremium })),
+    };
+  }
+
   async function downloadMedicalFinancingPdf() {
     if (!currentFinanceResult) return;
     const button = document.getElementById('financePdfDownload');
@@ -241,7 +258,7 @@
         headers: { 'Content-Type': 'application/json', Accept: 'application/pdf' },
         body: JSON.stringify({
           result: visibleResult(currentFinanceResult),
-          medicalContext: currentMedicalContext || { source: 'manual' },
+          medicalContext: buildMedicalContextForPdf(currentMedicalContext),
         }),
       });
       if (!response.ok) {
@@ -325,6 +342,7 @@
     MAX_DISPLAY_AGE,
     visibleRows,
     visibleResult,
+    buildMedicalContextForPdf,
     buildGroupedHeader,
     enhanceNotice,
     installPdfDownloadButton,
