@@ -5,10 +5,12 @@
   const MAX_DISPLAY_AGE = 99;
   const originalRenderFinanceResult = window.renderFinanceResult;
   const originalFinanceCsvText = window.financeCsvText;
+  const originalInvalidateFinanceResult = window.invalidateFinanceResult;
 
   if (
     typeof originalRenderFinanceResult !== 'function'
     || typeof originalFinanceCsvText !== 'function'
+    || typeof originalInvalidateFinanceResult !== 'function'
   ) {
     throw new Error('GF 結果介面補丁無法連接原有顯示及 CSV 匯出。');
   }
@@ -84,13 +86,30 @@
     summary.dataset.maximumAge = String(MAX_DISPLAY_AGE);
   }
 
-  function buildGroupedHeader(table) {
+  function normalizeProposalColumns(table) {
+    const originalHeaders = Array.from(table.querySelectorAll('thead th')).map((cell) => cell.textContent.trim());
+    if (originalHeaders.length < 7) return null;
+    const valueLabels = originalHeaders.slice(5, -1);
+    table.querySelectorAll('tbody tr').forEach((row) => {
+      const requestedCell = row.cells[2];
+      const actualCell = row.cells[3];
+      const cumulativeCell = row.cells[4];
+      if (!requestedCell || !actualCell || !cumulativeCell) return;
+      actualCell.title = `原定醫療保費：${requestedCell.textContent.trim()}`;
+      requestedCell.remove();
+      cumulativeCell.classList.add('gf-cumulative');
+      row.append(cumulativeCell);
+    });
+    return valueLabels;
+  }
+
+  function buildGroupedHeader(table, suppliedValueLabels = null) {
     const thead = table.querySelector('thead');
     const originalHeaders = Array.from(thead?.querySelectorAll('th') || []).map((cell) => cell.textContent.trim());
     if (!thead || originalHeaders.length < 7) return;
 
-    const fixedLabels = originalHeaders.slice(0, 5);
-    const valueLabels = originalHeaders.slice(5, -1);
+    const fixedLabels = ['年齡', '保單年度', '實際提款醫療保費'];
+    const valueLabels = suppliedValueLabels || originalHeaders.slice(5, -1);
     const statusLabel = originalHeaders.at(-1);
     const groupRow = document.createElement('tr');
     const labelRow = document.createElement('tr');
@@ -118,6 +137,13 @@
     status.scope = 'col';
     groupRow.append(status);
 
+    const cumulative = document.createElement('th');
+    cumulative.textContent = '累計提款';
+    cumulative.rowSpan = 2;
+    cumulative.scope = 'col';
+    cumulative.className = 'gf-cumulative';
+    groupRow.append(cumulative);
+
     valueLabels.forEach((label) => {
       const header = document.createElement('th');
       header.textContent = label === '提款後總額' ? '總額' : label;
@@ -128,10 +154,27 @@
     thead.replaceChildren(groupRow, labelRow);
   }
 
+  function installColumnWidths(table) {
+    table.querySelector('colgroup')?.remove();
+    const count = table.querySelector('tbody tr')?.cells.length || 0;
+    if (!count) return;
+    const group = document.createElement('colgroup');
+    for (let index = 0; index < count; index += 1) {
+      const column = document.createElement('col');
+      if (index === 0) column.className = 'gf-age-column';
+      if (index === 1) column.className = 'gf-year-column';
+      if (index === count - 1) column.className = 'gf-cumulative-column';
+      group.append(column);
+    }
+    table.prepend(group);
+  }
+
   function enhanceTable() {
     const table = document.getElementById('financeTable');
     if (!table) return;
-    buildGroupedHeader(table);
+    const valueLabels = normalizeProposalColumns(table);
+    buildGroupedHeader(table, valueLabels);
+    installColumnWidths(table);
     table.querySelectorAll('tbody tr').forEach((row) => {
       const age = Number(row.cells[0]?.textContent.replace(/,/g, '').trim());
       if (Number.isFinite(age) && age > MAX_DISPLAY_AGE) {
@@ -157,10 +200,27 @@
     table.closest('.tableWrap')?.after(notice);
   }
 
+  function setResultsVisible(visible) {
+    const summary = document.getElementById('financeSummary');
+    const table = document.getElementById('financeTable');
+    const wrap = table?.closest('.tableWrap');
+    const note = document.getElementById('financeAgeLimitNote');
+    if (summary) summary.hidden = !visible;
+    if (wrap) wrap.hidden = !visible;
+    if (note) note.hidden = !visible;
+  }
+
+  function patchedInvalidateFinanceResult(...args) {
+    const value = originalInvalidateFinanceResult.apply(this, args);
+    setResultsVisible(false);
+    return value;
+  }
+
   function patchedRenderFinanceResult(result, ...args) {
     const value = originalRenderFinanceResult.call(this, result, ...args);
     enhanceSummary(result);
     enhanceTable();
+    setResultsVisible(true);
     return value;
   }
 
@@ -184,6 +244,7 @@
 
   window.renderFinanceResult = patchedRenderFinanceResult;
   window.financeCsvText = patchedFinanceCsvText;
+  window.invalidateFinanceResult = patchedInvalidateFinanceResult;
   if (window.GFFinanceCore) {
     window.GFFinanceCore.financeCsvText = patchedFinanceCsvText;
   }
@@ -194,5 +255,9 @@
     visibleRows,
     visibleResult,
     buildGroupedHeader,
+    installColumnWidths,
+    normalizeProposalColumns,
   });
+
+  setResultsVisible(false);
 })();

@@ -46,6 +46,11 @@
       return [['age', 'policy_year', 'medical_premium', 'cumulative_withdrawal'], ...rows]
         .map((row) => row.map((value) => `"${value}"`).join(',')).join('\r\n');
     }
+    function invalidateFinanceResult() {
+      currentFinanceResult = null;
+      clearElement(document.getElementById('financeSummary'));
+      clearElement(document.getElementById('financeTable'));
+    }
     function buildStateTransitionRows() { return { rows: [] }; }
     function simulateMedicalFinancing() { return { rows: [], modelVersion: 'fixture-v1' }; }
     function canFundMedicalSchedule() { return { funded: true, result: simulateMedicalFinancing() }; }
@@ -61,6 +66,8 @@
   <script src="../assets/gf/gf_model_minimum_basic_patch.js"></script>
   <script src="../assets/gf/gf_model_presentation.js"></script>
   <script>
+    const initiallyHidden = document.getElementById('financeSummary').hidden
+      && document.querySelector('.tableWrap').hidden;
     const result = {
       input: { annual: 4000 },
       schedule: { 70: 1000, 71: 2000, 72: 3000 },
@@ -83,6 +90,11 @@
       catch (error) { results.push(`FAIL ${name}: ${error.message}`); }
     }
     function assert(condition, message) { if (!condition) throw new Error(message); }
+
+    test('首次進入不預先顯示結果', () => {
+      assert(initiallyHidden, '補丁載入後仍預先顯示摘要或列表');
+      assert(!document.getElementById('financeSummary').hidden && !document.querySelector('.tableWrap').hidden, '計算後沒有顯示結果');
+    });
 
     test('99歲保留而100歲從UI移除', () => {
       const ages = Array.from(document.querySelectorAll('#financeTable tbody tr')).map((row) => Number(row.cells[0].textContent));
@@ -123,6 +135,12 @@
       assert(rows.length === 2, `表頭不是兩層：${rows.length}`);
       assert(group?.textContent === '現金提取後之保單價值' && group.colSpan === 4, '組件模式分組表頭或colspan錯誤');
       assert(Array.from(rows[1].cells).map((cell) => cell.textContent).join('|') === '保證現金價值|復歸紅利|終期紅利|總額', '第二層價值欄錯誤');
+      const topLabels = Array.from(rows[0].cells).map((cell) => cell.textContent);
+      assert(topLabels.join('|') === '年齡|保單年度|實際提款醫療保費|現金提取後之保單價值|狀態|累計提款', `第一層欄位次序錯誤：${topLabels}`);
+      const firstBodyRow = document.querySelector('#financeTable tbody tr');
+      assert(firstBodyRow.cells.length === 9 && firstBodyRow.cells[2].textContent === '1000', '醫療保費與實際提款沒有合併成一欄');
+      const lastBodyCell = firstBodyRow.cells[firstBodyRow.cells.length - 1];
+      assert(lastBodyCell.textContent === '1000' && lastBodyCell.classList.contains('gf-cumulative'), '累計提款不是最右黃色欄');
 
       const totalTable = document.createElement('table');
       totalTable.innerHTML = '<thead><tr><th>年齡</th><th>保單年度</th><th>醫療保費</th><th>實際提款</th><th>累計提款</th><th>提款後總額</th><th>狀態</th></tr></thead>';
@@ -140,8 +158,15 @@
       assert(getComputedStyle(firstRow.cells[0]).position === 'sticky' && getComputedStyle(firstRow.cells[1]).position === 'sticky', '首兩欄CSS不是sticky');
       assert(firstRow.classList.contains('gf-five-year-divider'), '第70保單年度欠缺五年分隔線');
       assert(!firstRow.cells[0].dataset.label, '仍殘留手機卡片data-label');
+      assert(firstRow.cells[0].getBoundingClientRect().width <= 43 && firstRow.cells[1].getBoundingClientRect().width <= 55, '年齡或保單年度欄仍然太寬');
     });
 
+    test('輸入變更後隱藏舊結果', () => {
+      invalidateFinanceResult();
+      assert(document.getElementById('financeSummary').hidden && document.querySelector('.tableWrap').hidden, '輸入變更後舊結果仍顯示');
+    });
+
+    renderFinanceResult(result);
     const report = document.createElement('pre');
     report.id = 'report'; report.textContent = results.join('\n'); document.body.append(report);
   </script>

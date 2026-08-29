@@ -69,7 +69,7 @@ GF_MODEL_PAGE_PATH = os.environ.get(
     'GF_MODEL_PAGE_PATH',
     os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
 )
-GF_MODEL_ASSET_VERSION = '20260829-4'
+GF_MODEL_ASSET_VERSION = '20260829-5'
 GF_WITHDRAWAL_TARGET_YEAR = 20
 GF_OCR_ZOOM = float(os.environ.get('GF_OCR_ZOOM', '4.0'))
 GF_OCR_LANG = os.environ.get('GF_OCR_LANG', 'eng')
@@ -2276,6 +2276,11 @@ def gf_model_tool():
         html = model_page.read()
     html = html.replace('<title>GF 醫療融資反推系統</title>', '<title>GF 醫療融資</title>')
     html = html.replace('<h1>GF 醫療融資反推系統</h1>', '<h1>GF 醫療融資</h1>')
+    html = html.replace(
+        '  updateMedicalPremiumSourceUi();\n  runFinance();\n',
+        '  updateMedicalPremiumSourceUi();\n',
+        1,
+    )
     minimum_basic_patch_tag = (
         f'<script src="/tools/gf-model-minimum-basic-patch.js?v={GF_MODEL_ASSET_VERSION}"></script>'
     )

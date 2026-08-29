@@ -10,6 +10,10 @@
   background: #fff;
 }
 
+#financeSummary[hidden],
+.gf-finance-table-wrap[hidden],
+.gf-age-limit-note[hidden] { display: none !important; }
+
 #financeSummary .gf-summary-title {
   grid-column: 1 / -1;
   padding: 7px 10px;
@@ -69,7 +73,7 @@
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: auto;
+  table-layout: fixed;
   background: #fff;
   color: #17241f;
   font-size: 11px;
@@ -115,8 +119,10 @@
   background: #fff;
   text-align: center;
 }
-#financeTable .gf-sticky-age { left: 0; width: 64px; min-width: 64px; }
-#financeTable .gf-sticky-year { left: 64px; width: 76px; min-width: 76px; }
+#financeTable .gf-sticky-age { left: 0; width: 42px; min-width: 42px; max-width: 42px; }
+#financeTable .gf-sticky-year { left: 42px; width: 54px; min-width: 54px; max-width: 54px; }
+#financeTable col.gf-age-column { width: 42px; }
+#financeTable col.gf-year-column { width: 54px; }
 #financeTable thead .gf-sticky-age,
 #financeTable thead .gf-sticky-year { z-index: 6; background: #e7eae9; }
 #financeTable .gf-sticky-year { box-shadow: 1px 0 0 #737b78; }
@@ -133,6 +139,15 @@
 #financeTable tbody tr.force-row .gf-sticky-year { background: #fff0ed; }
 #financeTable td.status-active,
 #financeTable td.status-surrendered { font-weight: 800; }
+
+#financeTable .gf-cumulative {
+  background: #fff2a8;
+  color: #4f3b00;
+  font-weight: 800;
+}
+#financeTable thead .gf-cumulative { background: #f3d765; }
+#financeTable tbody tr.active-row .gf-cumulative { background: #fff0a0; }
+#financeTable tbody tr.force-row .gf-cumulative { background: #f8d897; }
 
 .gf-age-limit-note {
   margin: 7px 2px 0;
