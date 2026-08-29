@@ -18,6 +18,7 @@ from reportlab.platypus import Paragraph
 FONT_NAME = "GFTraditionalChinese"
 FONT_CANDIDATES = (
     os.environ.get("GF_PDF_FONT_PATH", ""),
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/System/Library/Fonts/STHeiti Medium.ttc",
 )

@@ -5,6 +5,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     fonts-noto-cjk \
+    fonts-wqy-zenhei \
     fontconfig \
     tesseract-ocr \
     tesseract-ocr-eng \
