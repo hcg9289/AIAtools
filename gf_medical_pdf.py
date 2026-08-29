@@ -13,6 +13,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Paragraph
+from pypdf import PdfReader, PdfWriter
 
 
 FONT_NAME = "GFTraditionalChinese"
@@ -47,6 +48,18 @@ TEXT = colors.HexColor("#17241F")
 MUTED = colors.HexColor("#5C6864")
 PROJECTION_ROWS_PER_PAGE = 31
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "gf")
+OFFICIAL_PREMIUM_TABLE_PATH = os.path.join(
+    ASSET_DIR,
+    "aia_vhis_selectwise_premium_table_2025-10-27.pdf",
+)
+OFFICIAL_PLAN_MARKER = "AIA自願醫保睿選計劃"
+DEDUCTIBLE_PAGE_OFFSETS = {
+    "0/0": 0,
+    "8800/1100": 2,
+    "18000/2250": 4,
+    "30000/3750": 6,
+    "55000/6875": 8,
+}
 
 
 class PdfPayloadError(ValueError):
@@ -246,41 +259,67 @@ def _premium_rows(data):
     return [row for row in data["rows"] if row["requested_withdrawal"] > 0]
 
 
-def _draw_premium_page(c, data, page_no, total_pages):
-    page_size = A4
-    c.setPageSize(page_size)
-    width, height = page_size
-    context = data["context"]
-    premium_rows = _premium_rows(data)
-    _page_header(c, page_size, "醫療保費表", f"{context['formName']} · {context['deductibleLabel']}", page_no, total_pages)
-    c.setFillColor(TEXT)
-    c.setFont(FONT_NAME, 9)
-    c.drawString(16 * mm, height - 28 * mm, context["planName"])
-    c.setFillColor(MUTED)
-    c.setFont(FONT_NAME, 7.5)
-    c.drawRightString(width - 16 * mm, height - 28 * mm, f"美元年繳 · 費率日期 {context['effectiveDate']}")
+def _compact_label(value):
+    return "".join(character for character in str(value) if character.isalnum())
 
-    groups = 3
-    rows_per_group = max(1, math.ceil(len(premium_rows) / groups))
-    columns = [premium_rows[index * rows_per_group:(index + 1) * rows_per_group] for index in range(groups)]
-    x = 16 * mm
-    top = height - 36 * mm
-    pair_width = (width - 32 * mm) / groups
-    age_width = pair_width * 0.34
-    premium_width = pair_width - age_width
-    row_height = min(6.5 * mm, (height - 52 * mm) / (rows_per_group + 1))
-    for group_index, group in enumerate(columns):
-        gx = x + group_index * pair_width
-        fills = {(0, 0): PALE_BLUE, (0, 1): PALE_BLUE}
-        _draw_grid(c, gx, top, [age_width, premium_width], [row_height] * (len(group) + 1), fills)
-        _cell_text(c, "年齡", gx, top - row_height, age_width, row_height, size=7.5, bold=True)
-        _cell_text(c, "年繳保費", gx + age_width, top - row_height, premium_width, row_height, size=7.5, bold=True)
-        y = top - row_height
-        for row in group:
-            y -= row_height
-            _cell_text(c, row["age"], gx, y, age_width, row_height, size=7)
-            _cell_text(c, _money(row["requested_withdrawal"]), gx + age_width, y, premium_width, row_height, size=7)
-    c.showPage()
+
+def _deductible_key(label):
+    compact = _compact_label(label)
+    for key in sorted(DEDUCTIBLE_PAGE_OFFSETS, key=len, reverse=True):
+        hkd, usd = key.split("/")
+        if hkd in compact and usd in compact:
+            return key
+    return None
+
+
+def _official_premium_page_indices(context):
+    if context["source"].lower() != "table":
+        return ()
+    if OFFICIAL_PLAN_MARKER not in _compact_label(context["planName"]):
+        raise PdfPayloadError("目前沒有這個醫療計劃的官方保費表。")
+
+    form_name = context["formName"]
+    if "附加" in form_name:
+        form_offset = 10
+    elif "基本" in form_name:
+        form_offset = 0
+    else:
+        raise PdfPayloadError("請先選擇基本計劃或附加契約，才可加入官方保費表。")
+
+    deductible = _deductible_key(context["deductibleLabel"])
+    if deductible is None:
+        raise PdfPayloadError("目前沒有這個自付費選項的官方保費表。")
+    first_page = form_offset + DEDUCTIBLE_PAGE_OFFSETS[deductible]
+    return (first_page, first_page + 1)
+
+
+def _insert_official_premium_pages(generated_pdf, premium_page_indices, projection_pages):
+    generated = PdfReader(generated_pdf)
+    if not premium_page_indices:
+        generated_pdf.seek(0)
+        return generated_pdf
+    if not os.path.isfile(OFFICIAL_PREMIUM_TABLE_PATH):
+        raise PdfPayloadError("官方醫療保費表檔案尚未安裝。")
+
+    official = PdfReader(OFFICIAL_PREMIUM_TABLE_PATH)
+    if max(premium_page_indices) >= len(official.pages):
+        raise PdfPayloadError("官方醫療保費表頁面不完整。")
+
+    writer = PdfWriter()
+    writer.add_metadata({
+        "/Title": "GF 醫療融資方案",
+        "/Author": "AIAtools",
+    })
+    for page in generated.pages[:projection_pages]:
+        writer.add_page(page)
+    writer.append(official, pages=list(premium_page_indices), import_outline=False)
+    for page in generated.pages[projection_pages:]:
+        writer.add_page(page)
+
+    output = io.BytesIO()
+    writer.write(output)
+    output.seek(0)
+    return output
 
 
 def _value_at_age(rows, age, field):
@@ -398,14 +437,14 @@ def _draw_summary_page(c, data, page_no, total_pages):
 def build_medical_financing_pdf(payload):
     data = validate_medical_financing_payload(payload)
     projection_pages = max(1, math.ceil(len(data["rows"]) / PROJECTION_ROWS_PER_PAGE))
-    total_pages = projection_pages + 2
+    premium_page_indices = _official_premium_page_indices(data["context"])
+    total_pages = projection_pages + len(premium_page_indices) + 1
     output = io.BytesIO()
     c = canvas.Canvas(output, pagesize=A4, pageCompression=1)
     c.setTitle("GF 醫療融資方案")
     c.setAuthor("AIAtools")
     used = _draw_projection_pages(c, data, 1, total_pages)
-    _draw_premium_page(c, data, used + 1, total_pages)
-    _draw_summary_page(c, data, used + 2, total_pages)
+    _draw_summary_page(c, data, used + len(premium_page_indices) + 1, total_pages)
     c.save()
     output.seek(0)
-    return output
+    return _insert_official_premium_pages(output, premium_page_indices, projection_pages)
