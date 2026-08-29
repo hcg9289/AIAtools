@@ -71,8 +71,10 @@
 
   function setReady(ready) {
     const copyButton = document.getElementById('pgsCopy');
+    const section = document.getElementById('pgsTools');
     if (copyButton) copyButton.disabled = !ready;
-    setStatus(ready ? '結果已準備好；可複製原定提款排程到 PGS。' : '輸入已變更，請重新計算後再複製。');
+    if (section) section.hidden = !ready;
+    setStatus(ready ? '結果已準備好；只可貼到 PGS 網頁版。' : '輸入已變更，請重新計算後再複製。');
   }
 
   async function copyData() {
@@ -98,14 +100,15 @@
     if (!table) return;
 
     const style = document.createElement('style');
-    style.textContent = '.pgs-tools{margin-top:16px;padding:16px;border:1px solid #b9d4c7;border-radius:10px;background:#eef8f3}.pgs-tools h3{margin:0 0 8px}.pgs-tools ol{margin:12px 0 0;padding-left:22px}.pgs-tools li+li{margin-top:5px}.pgs-bookmark-setup{margin-top:14px;padding:14px;border:2px solid #bd7b18;border-radius:10px;background:#fffaf0}.pgs-bookmark-setup h4{margin:0 0 8px;color:#6b4815}.pgs-drag-warning{margin:0 0 12px;font-weight:700;color:#9b341c}.pgs-bookmarklet{display:inline-block;padding:11px 18px;border-radius:9px;background:#176b57;color:#fff!important;font-weight:800;text-decoration:none;cursor:grab;box-shadow:0 2px 5px rgba(0,0,0,.16)}.pgs-bookmarklet:active{cursor:grabbing}.pgs-bookmark-help{margin:10px 0 0;color:#5b5142;font-size:13px}.pgs-status{min-height:1.55em;margin-top:9px;font-size:13px;color:#285449}@media(max-width:620px){.pgs-tools .toolbar>*{width:100%;text-align:center}.pgs-bookmarklet{display:block;text-align:center}}';
+    style.textContent = '.pgs-tools[hidden]{display:none!important}.pgs-tools{margin-top:16px;padding:16px;border:1px solid #b9d4c7;border-radius:10px;background:#eef8f3}.pgs-tools h3{margin:0 0 8px}.pgs-platform-warning{margin:10px 0;padding:11px 13px;border-left:4px solid #b84b37;background:#fff1ed;color:#7b2d20;font-weight:800}.pgs-tools ol{margin:12px 0 0;padding-left:22px}.pgs-tools li+li{margin-top:5px}.pgs-bookmark-setup{margin-top:14px;padding:14px;border:2px solid #bd7b18;border-radius:10px;background:#fffaf0}.pgs-bookmark-setup h4{margin:0 0 8px;color:#6b4815}.pgs-drag-warning{margin:0 0 12px;font-weight:700;color:#9b341c}.pgs-bookmarklet{display:inline-block;padding:11px 18px;border-radius:9px;background:#176b57;color:#fff!important;font-weight:800;text-decoration:none;cursor:grab;box-shadow:0 2px 5px rgba(0,0,0,.16)}.pgs-bookmarklet:active{cursor:grabbing}.pgs-bookmark-help{margin:10px 0 0;color:#5b5142;font-size:13px}.pgs-status{min-height:1.55em;margin-top:9px;font-size:13px;color:#285449}@media(max-width:620px){.pgs-tools .toolbar>*{width:100%;text-align:center}.pgs-bookmarklet{display:block;text-align:center}}';
     document.head.appendChild(style);
 
     const section = document.createElement('section');
     section.className = 'pgs-tools';
     section.id = 'pgsTools';
+    section.hidden = true;
     section.setAttribute('aria-labelledby', 'pgsToolsTitle');
-    section.innerHTML = '<h3 id="pgsToolsTitle">填入 AIA PGS 提款設定</h3><div class="hint">工具會複製第 1–72 保單年度的原定提款排程；不會把年齡當作保單年度，也不會代你按 PGS 的「計算及儲存」。</div><div class="toolbar"><button class="primary" id="pgsCopy" type="button" disabled>複製 PGS 提款資料</button></div><div class="pgs-bookmark-setup"><h4>首次設定：把一鍵填入工具加入書籤列</h4><p class="pgs-drag-warning">請勿直接點擊下方按鈕。請用滑鼠按住它，拖到瀏覽器最上方的書籤列，再放開滑鼠。</p><a class="pgs-bookmarklet" id="pgsBookmarklet" draggable="true" href="#" title="按住並拖到瀏覽器書籤列">PGS 一鍵填入｜按住拖到書籤列</a><p class="pgs-bookmark-help">看不到書籤列？Chrome／Edge：Mac 按 Command + Shift + B；Windows 按 Ctrl + Shift + B。這項設定每部電腦只需完成一次。</p></div><ol><li>先把上方「PGS 一鍵填入」拖到瀏覽器書籤列。</li><li>每次在本頁完成計算後，按「複製 PGS 提款資料」。</li><li>轉到 PGS「進階設定」頁，再點書籤列內的「PGS 一鍵填入」。</li><li>核對逐年金額後，由你親自按 PGS 的「計算及儲存」。</li></ol><div class="pgs-status" id="pgsStatus" role="status">請先完成反推計算。</div>';
+    section.innerHTML = '<h3 id="pgsToolsTitle">填入 AIA PGS 提款設定（只限網頁版）</h3><p class="pgs-platform-warning">只限網頁版使用，PGS App不能夠使用一鍵貼上。</p><div class="hint">工具會複製第 1–72 保單年度的原定提款排程；不會把年齡當作保單年度，也不會代你按 PGS 的「計算及儲存」。</div><div class="toolbar"><button class="primary" id="pgsCopy" type="button" disabled>複製 PGS 提款資料</button></div><div class="pgs-bookmark-setup"><h4>首次設定：把網頁版一鍵填入工具加入書籤列</h4><p class="pgs-drag-warning">請勿直接點擊下方按鈕。請在電腦瀏覽器用滑鼠按住它，拖到最上方的書籤列，再放開滑鼠。</p><a class="pgs-bookmarklet" id="pgsBookmarklet" draggable="true" href="#" title="按住並拖到瀏覽器書籤列">PGS 網頁版一鍵填入｜按住拖到書籤列</a><p class="pgs-bookmark-help">看不到書籤列？Chrome／Edge：Mac 按 Command + Shift + B；Windows 按 Ctrl + Shift + B。這項設定每部電腦只需完成一次；PGS App不支援此功能。</p></div><ol><li>在電腦瀏覽器把上方「PGS 網頁版一鍵填入」拖到書籤列。</li><li>每次在本頁完成計算後，按「複製 PGS 提款資料」。</li><li>轉到 PGS 網頁版的「進階設定」頁，再點書籤列內的「PGS 網頁版一鍵填入」。</li><li>核對逐年金額後，由你親自按 PGS 的「計算及儲存」。</li></ol><div class="pgs-status" id="pgsStatus" role="status">請先完成反推計算。</div>';
     table.closest('.tableWrap')?.after(section);
 
     const copyButton = document.getElementById('pgsCopy');
@@ -114,7 +117,7 @@
     bookmarklet?.setAttribute('href', BOOKMARKLET_CODE);
     bookmarklet?.addEventListener('click', (event) => {
       event.preventDefault();
-      window.alert('這個按鈕不是直接點擊使用。請用滑鼠按住它，拖到瀏覽器最上方的書籤列，再放開滑鼠。加入後，才在 PGS 頁面點擊書籤列內的「PGS 一鍵填入」。');
+      window.alert('此功能只限 PGS 網頁版，PGS App不能夠使用一鍵貼上。這個按鈕不是直接點擊使用，請在電腦瀏覽器用滑鼠按住它，拖到最上方的書籤列。');
     });
   }
 

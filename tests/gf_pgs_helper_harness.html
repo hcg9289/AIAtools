@@ -20,6 +20,9 @@
       assert(bookmarklet.draggable,'書籤連結不可拖曳');
       assert(bookmarklet.getAttribute('href')===GFPgsHelper.BOOKMARKLET_CODE,'書籤連結沒有一鍵填入程式');
       assert(document.getElementById('pgsCopy').disabled,'未計算時按鈕應停用');
+      assert(document.getElementById('pgsTools').hidden,'未計算時已顯示PGS工具');
+      assert(document.getElementById('pgsToolsTitle').textContent.includes('只限網頁版'),'標題沒有網頁版限制');
+      assert(document.querySelector('.pgs-platform-warning').textContent.includes('PGS App不能夠使用一鍵貼上'),'欠缺PGS App限制警告');
     });
     test('拖曳說明清楚且誤點會提示',()=>{
       const setup=document.querySelector('.pgs-bookmark-setup');
@@ -29,7 +32,7 @@
       window.alert=message=>{alertMessage=message};
       document.getElementById('pgsBookmarklet').click();
       window.alert=originalAlert;
-      assert(alertMessage.includes('不是直接點擊')&&alertMessage.includes('拖到瀏覽器最上方的書籤列'),'誤點時沒有清楚提示');
+      assert(alertMessage.includes('只限 PGS 網頁版')&&alertMessage.includes('PGS App不能夠使用一鍵貼上')&&alertMessage.includes('拖到最上方的書籤列'),'誤點時沒有清楚提示');
     });
     test('按原定提款排程映射72年',()=>{
       const payload=JSON.parse(GFPgsHelper.buildPayload({schedule:{1:101,6:606,72:7272}}));
@@ -52,8 +55,10 @@
     test('結果狀態控制複製按鈕',()=>{
       renderFinanceResult({schedule:{6:600}});
       assert(!document.getElementById('pgsCopy').disabled,'有結果仍被停用');
+      assert(!document.getElementById('pgsTools').hidden,'計算完成後PGS工具仍被隱藏');
       invalidateFinanceResult();
       assert(document.getElementById('pgsCopy').disabled,'輸入改變後未停用');
+      assert(document.getElementById('pgsTools').hidden,'輸入改變後PGS工具仍然顯示');
     });
     test('書籤只填格不提交',()=>{
       const code=GFPgsHelper.BOOKMARKLET_CODE;

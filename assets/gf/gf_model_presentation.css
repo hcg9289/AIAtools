@@ -13,6 +13,26 @@
 #financeSummary[hidden],
 .gf-finance-table-wrap[hidden],
 .gf-age-limit-note[hidden] { display: none !important; }
+#financeDownload[hidden],
+#financePdfDownload[hidden],
+#financeDownloadActions[hidden] { display: none !important; }
+
+.gf-download-actions {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.gf-download-actions button {
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .gf-download-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
 
 #financeSummary .gf-summary-title {
   grid-column: 1 / -1;

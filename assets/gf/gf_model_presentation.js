@@ -221,9 +221,23 @@
     if (note) note.hidden = !visible;
   }
 
-  function setPdfDownloadEnabled(enabled) {
-    const button = document.getElementById('financePdfDownload');
-    if (button) button.disabled = !enabled;
+  function setDownloadActionsVisible(visible) {
+    const csvButton = document.getElementById('financeDownload');
+    const pdfButton = document.getElementById('financePdfDownload');
+    const wrapper = document.getElementById('financeDownloadActions');
+    [csvButton, pdfButton].forEach((button) => {
+      if (!button) return;
+      button.hidden = !visible;
+      button.disabled = !visible;
+    });
+    if (wrapper) wrapper.hidden = !visible;
+  }
+
+  function resetPremiumNotice() {
+    const notice = document.getElementById('financeNotice');
+    if (!notice) return;
+    notice.textContent = '輸入醫療保費表後按「開始計算」。提款最早只可在第 6 保單年度年末進行。';
+    notice.className = 'notice warn';
   }
 
   function buildMedicalContextForPdf(context) {
@@ -285,20 +299,29 @@
     if (document.getElementById('financePdfDownload')) return;
     const csvButton = document.getElementById('financeDownload');
     if (!csvButton) return;
+    const wrapper = document.createElement('div');
+    wrapper.id = 'financeDownloadActions';
+    wrapper.className = 'gf-download-actions';
+    wrapper.hidden = true;
+    csvButton.before(wrapper);
+    wrapper.append(csvButton);
     const button = document.createElement('button');
     button.id = 'financePdfDownload';
     button.type = 'button';
     button.className = 'secondary';
     button.textContent = '下載 PDF';
     button.disabled = true;
+    button.hidden = true;
     button.addEventListener('click', downloadMedicalFinancingPdf);
-    csvButton.after(button);
+    wrapper.append(button);
+    csvButton.hidden = true;
   }
 
   function patchedInvalidateFinanceResult(...args) {
     const value = originalInvalidateFinanceResult.apply(this, args);
     setResultsVisible(false);
-    setPdfDownloadEnabled(false);
+    setDownloadActionsVisible(false);
+    resetPremiumNotice();
     return value;
   }
 
@@ -308,7 +331,7 @@
     enhanceNotice(result);
     enhanceTable();
     setResultsVisible(true);
-    setPdfDownloadEnabled(true);
+    setDownloadActionsVisible(true);
     return value;
   }
 
@@ -345,6 +368,8 @@
     buildMedicalContextForPdf,
     buildGroupedHeader,
     enhanceNotice,
+    resetPremiumNotice,
+    setDownloadActionsVisible,
     installPdfDownloadButton,
     installColumnWidths,
     normalizeProposalColumns,
@@ -352,4 +377,5 @@
 
   installPdfDownloadButton();
   setResultsVisible(false);
+  setDownloadActionsVisible(false);
 })();

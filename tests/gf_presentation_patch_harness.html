@@ -79,6 +79,9 @@
   <script>
     const initiallyHidden = document.getElementById('financeSummary').hidden
       && document.querySelector('.tableWrap').hidden;
+    const initialActionsHidden = document.getElementById('financeDownload').hidden
+      && document.getElementById('financePdfDownload').hidden
+      && document.getElementById('financeDownloadActions').hidden;
     const result = {
       input: { annual: 4000, total: 20000 },
       schedule: { 70: 1000, 71: 2000, 72: 3000 },
@@ -104,9 +107,12 @@
 
     test('首次進入不預先顯示結果', () => {
       assert(initiallyHidden, '補丁載入後仍預先顯示摘要或列表');
+      assert(initialActionsHidden, '尚未計算已顯示 CSV 或 PDF 下載按鈕');
       assert(!document.getElementById('financeSummary').hidden && !document.querySelector('.tableWrap').hidden, '計算後沒有顯示結果');
       assert(document.getElementById('financePdfDownload')?.textContent === '下載 PDF', '欠缺下載 PDF 按鈕');
       assert(!document.getElementById('financePdfDownload').disabled, '計算完成後 PDF 按鈕沒有啟用');
+      assert(!document.getElementById('financeDownload').hidden && !document.getElementById('financePdfDownload').hidden, '計算完成後沒有顯示下載按鈕');
+      assert(!document.getElementById('financeDownloadActions').hidden, '計算完成後下載按鈕群組仍被隱藏');
     });
 
     test('99歲保留而100歲從UI移除', () => {
@@ -184,6 +190,9 @@
       invalidateFinanceResult();
       assert(document.getElementById('financeSummary').hidden && document.querySelector('.tableWrap').hidden, '輸入變更後舊結果仍顯示');
       assert(document.getElementById('financePdfDownload').disabled, '輸入變更後 PDF 按鈕仍可下載舊結果');
+      assert(document.getElementById('financeDownload').hidden && document.getElementById('financePdfDownload').hidden, '輸入變更後下載按鈕仍然顯示');
+      assert(document.getElementById('financeDownloadActions').hidden, '輸入變更後下載按鈕群組仍然顯示');
+      assert(document.getElementById('financeNotice').textContent.includes('輸入醫療保費表後按「開始計算」'), '輸入變更後仍顯示上一輪保費摘要');
     });
 
     test('PDF攜帶完整官方醫療保費率', () => {
