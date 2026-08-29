@@ -7,6 +7,7 @@
 </head>
 <body>
   <div id="financeSummary" class="summary"></div>
+  <div id="financeNotice" class="notice">舊有研究說明</div>
   <div class="tableWrap"><table id="financeTable" class="dataTable finance-table"></table></div>
   <script>
     let currentFinanceResult = null;
@@ -69,7 +70,7 @@
     const initiallyHidden = document.getElementById('financeSummary').hidden
       && document.querySelector('.tableWrap').hidden;
     const result = {
-      input: { annual: 4000 },
+      input: { annual: 4000, total: 20000 },
       schedule: { 70: 1000, 71: 2000, 72: 3000 },
       requestedTotal: 6000,
       actualTotal: 6000,
@@ -113,6 +114,12 @@
       assert(summaryStyle.borderTopStyle === 'solid' && metricStyle.boxShadow === 'none', '摘要仍是獨立浮動卡片');
       const firstValue = document.querySelector('#financeSummary .metric b');
       assert(firstValue.textContent === 'USD 4,000' && firstValue.getBoundingClientRect().right <= document.documentElement.clientWidth, `摘要數值超出手機畫面：${firstValue.getBoundingClientRect().right}/${document.documentElement.clientWidth}`);
+    });
+
+    test('淺藍說明只顯示年繳及五年總保費', () => {
+      const lines = Array.from(document.querySelectorAll('#financeNotice > div')).map((line) => line.textContent);
+      assert(lines.join('|') === '年繳保費：USD 4,000|五年總保費：USD 20,000', `保費說明錯誤：${lines}`);
+      assert(!document.getElementById('financeNotice').textContent.includes('baseline'), '仍顯示舊有研究說明');
     });
 
     test('醫療融資CSV與UI同樣截止99歲', () => {

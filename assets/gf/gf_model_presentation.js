@@ -86,6 +86,17 @@
     summary.dataset.maximumAge = String(MAX_DISPLAY_AGE);
   }
 
+  function enhanceNotice(result) {
+    const notice = document.getElementById('financeNotice');
+    if (!notice) return;
+    const annual = document.createElement('div');
+    const total = document.createElement('div');
+    annual.textContent = `年繳保費：USD ${formatMoney(result?.input?.annual)}`;
+    total.textContent = `五年總保費：USD ${formatMoney(result?.input?.total)}`;
+    notice.replaceChildren(annual, total);
+    notice.className = 'notice gf-premium-notice';
+  }
+
   function normalizeProposalColumns(table) {
     const originalHeaders = Array.from(table.querySelectorAll('thead th')).map((cell) => cell.textContent.trim());
     if (originalHeaders.length < 7) return null;
@@ -219,6 +230,7 @@
   function patchedRenderFinanceResult(result, ...args) {
     const value = originalRenderFinanceResult.call(this, result, ...args);
     enhanceSummary(result);
+    enhanceNotice(result);
     enhanceTable();
     setResultsVisible(true);
     return value;
@@ -255,6 +267,7 @@
     visibleRows,
     visibleResult,
     buildGroupedHeader,
+    enhanceNotice,
     installColumnWidths,
     normalizeProposalColumns,
   });

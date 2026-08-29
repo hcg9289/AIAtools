@@ -156,6 +156,12 @@
   text-align: right;
 }
 
+#financeNotice.gf-premium-notice {
+  display: grid;
+  gap: 4px;
+  line-height: 1.45;
+}
+
 @media (max-width: 700px) {
   #financeSummary { grid-template-columns: 1fr; }
   #financeSummary .metric,
