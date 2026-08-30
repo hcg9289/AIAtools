@@ -10,7 +10,9 @@ sys.path.insert(0, str(ROOT))
 
 from gf_medical_pdf import (  # noqa: E402
     PdfPayloadError,
+    _cash_value_milestones,
     _combo_paid_to_age,
+    _delayed_financing_start_age,
     _medical_paid_to_age,
     _official_premium_page_indices,
     build_medical_financing_pdf,
@@ -58,6 +60,44 @@ def sample_payload(row_count=71):
 
 
 def main():
+    assert _cash_value_milestones(28) == [
+        ("第 10 個保單年度", 38),
+        ("第 20 個保單年度", 48),
+        ("至 65 歲", 65),
+        ("至 85 歲", 85),
+        ("至 99 歲", 99),
+    ]
+    assert _cash_value_milestones(55) == [
+        ("第 10 個保單年度", 65),
+        ("第 20 個保單年度", 75),
+        ("至 85 歲", 85),
+        ("至 99 歲", 99),
+    ], "同一歲數的保單年度及固定年齡不應重複顯示"
+    print("PASS 可提取現金價值採用第10／20保單年度及65／85／99歲里程碑")
+
+    immediate_five = validate_medical_financing_payload(sample_payload())
+    assert _delayed_financing_start_age(immediate_five) is None, "五年供款第6年立即開始不應顯示紅字"
+    delayed_five_payload = sample_payload()
+    for row in delayed_five_payload["result"]["rows"]:
+        if row["policy_year"] < 13:
+            row["requested_withdrawal"] = 0
+            row["withdrawal_total"] = 0
+    delayed_five = validate_medical_financing_payload(delayed_five_payload)
+    assert _delayed_financing_start_age(delayed_five) == 41, "五年供款延後至第13年應顯示41歲"
+
+    immediate_single_payload = sample_payload()
+    immediate_single_payload["result"]["input"]["paymentMode"] = "single"
+    for row in immediate_single_payload["result"]["rows"]:
+        row["requested_withdrawal"] = 2250 if row["policy_year"] >= 2 else 0
+        row["withdrawal_total"] = row["requested_withdrawal"]
+    immediate_single = validate_medical_financing_payload(immediate_single_payload)
+    assert _delayed_financing_start_age(immediate_single) is None, "一次性繳費第2年最早開始不應顯示紅字"
+    immediate_single_payload["result"]["rows"][1]["requested_withdrawal"] = 0
+    immediate_single_payload["result"]["rows"][1]["withdrawal_total"] = 0
+    delayed_single = validate_medical_financing_payload(immediate_single_payload)
+    assert _delayed_financing_start_age(delayed_single) == 31, "一次性繳費延後至第3年應顯示31歲"
+    print("PASS 兩種供款方式只在延後開始醫療融資時顯示年齡")
+
     deductible_pages = {
         "HKD 0／USD 0": (0, 1),
         "HKD 8,800／USD 1,100": (2, 3),
@@ -102,9 +142,17 @@ def main():
     assert _medical_paid_to_age(data, 33) == 11400, "基本計劃沒有按完整保單年度累計官方醫療保費"
     assert _combo_paid_to_age(data, 33) == 34970, "組合計劃沒有計入提款前需自行支付的醫療保費"
     summary_text = reader.pages[-1].extract_text() or ""
+    assert "醫療融資從" not in summary_text, "五年供款第6年立即開始不應顯示紅字"
+    assert "第 10 個保單年度" in summary_text and "第 20 個保單年度" in summary_text, "總結頁欠缺新現金價值里程碑"
+    assert "至 30 歲" not in summary_text, "總結頁仍顯示舊有30歲現金價值里程碑"
     assert "每年 USD 4,714 儲蓄" in summary_text, "組合計劃仍然顯示每月儲蓄"
     assert "USD 11,400" in summary_text and "USD 34,970" in summary_text, "總結頁累計保費顯示錯誤"
     print("PASS 每年儲蓄及基本／組合計劃累計保費公式")
+
+    delayed_reader = PdfReader(build_medical_financing_pdf(delayed_five_payload))
+    delayed_summary = delayed_reader.pages[-1].extract_text() or ""
+    assert "醫療融資從41歲開始" in delayed_summary, "延後開始的PDF欠缺細紅字年齡提示"
+    print("PASS 延後開始的PDF顯示細紅字醫療融資年齡")
 
     rider_payload = sample_payload()
     rider_payload["result"]["input"]["annual"] = 4211
@@ -123,6 +171,22 @@ def main():
     assert "每年 USD 4,211 儲蓄" in rider_summary, "附加契約沒有顯示每年儲蓄"
     assert "USD 2,859" in rider_summary and "USD 23,914" in rider_summary, "附加契約總結頁累計保費錯誤"
     print("PASS 圖中附加契約 18,000 自付費至 33 歲案例")
+
+    single_payload = sample_payload()
+    single_payload["result"]["input"].update({
+        "annual": 35557.83,
+        "total": 35557.83,
+        "basic": 35917,
+        "paymentMode": "single",
+    })
+    single_data = validate_medical_financing_payload(single_payload)
+    assert single_data["input"]["paymentMode"] == "single", "一次性繳費模式沒有保留"
+    assert _combo_paid_to_age(single_data, 33) == 46957.83, "一次性繳費累計投入錯誤"
+    single_reader = PdfReader(build_medical_financing_pdf(single_payload))
+    single_summary = single_reader.pages[-1].extract_text() or ""
+    assert "一次性 USD 35,558 儲蓄" in single_summary, "一次性繳費總結標籤錯誤"
+    assert "一次性" in single_summary and "USD 37,818" in single_summary, "一次性首年組合保費錯誤"
+    print("PASS 一次性繳費PDF標籤及累計投入")
 
     manual = sample_payload()
     manual["medicalContext"] = {"source": "manual"}

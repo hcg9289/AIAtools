@@ -70,7 +70,7 @@ GF_MODEL_PAGE_PATH = os.environ.get(
     'GF_MODEL_PAGE_PATH',
     os.path.join(BASE_DIR, 'research', 'gf_withdrawal_model.html')
 )
-GF_MODEL_ASSET_VERSION = '20260829-9'
+GF_MODEL_ASSET_VERSION = '20260829-10'
 GF_WITHDRAWAL_TARGET_YEAR = 20
 GF_OCR_ZOOM = float(os.environ.get('GF_OCR_ZOOM', '4.0'))
 GF_OCR_LANG = os.environ.get('GF_OCR_LANG', 'eng')
@@ -2282,37 +2282,34 @@ def gf_model_tool():
         '  updateMedicalPremiumSourceUi();\n',
         1,
     )
-    minimum_basic_patch_tag = (
-        f'<script src="/tools/gf-model-minimum-basic-patch.js?v={GF_MODEL_ASSET_VERSION}"></script>'
-    )
     presentation_style_tag = (
         f'<link rel="stylesheet" href="/tools/gf-model-presentation.css?v={GF_MODEL_ASSET_VERSION}">'
     )
-    presentation_patch_tag = (
-        f'<script src="/tools/gf-model-presentation.js?v={GF_MODEL_ASSET_VERSION}"></script>'
+    single_style_tag = (
+        f'<link rel="stylesheet" href="/tools/gf-model-single-experiment.css?v={GF_MODEL_ASSET_VERSION}">'
     )
-    helper_tag = f'<script src="/tools/gf-model-pgs-helper.js?v={GF_MODEL_ASSET_VERSION}"></script>'
+    payment_plan_style_tag = (
+        f'<link rel="stylesheet" href="/tools/gf-model-payment-plan.css?v={GF_MODEL_ASSET_VERSION}">'
+    )
     if presentation_style_tag not in html:
-        html = html.replace('</head>', f'{presentation_style_tag}</head>', 1)
-    if minimum_basic_patch_tag not in html:
-        if helper_tag in html:
-            html = html.replace(
-                helper_tag,
-                f'{minimum_basic_patch_tag}{presentation_patch_tag}{helper_tag}',
-                1,
-            )
-        else:
-            html = html.replace(
-                '</body>',
-                f'{minimum_basic_patch_tag}{presentation_patch_tag}{helper_tag}</body>',
-            )
-    else:
-        if presentation_patch_tag not in html:
-            anchor = helper_tag if helper_tag in html else '</body>'
-            replacement = f'{presentation_patch_tag}{anchor}'
-            html = html.replace(anchor, replacement, 1)
-        if helper_tag not in html:
-            html = html.replace('</body>', f'{helper_tag}</body>')
+        html = html.replace(
+            '</head>',
+            f'{presentation_style_tag}{single_style_tag}{payment_plan_style_tag}</head>',
+            1,
+        )
+    script_paths = (
+        '/tools/gf-model-minimum-basic-patch.js',
+        '/tools/gf-model-single-official-data.js',
+        '/tools/gf-model-single-experiment.js',
+        '/tools/gf-model-payment-plan.js',
+        '/tools/gf-model-presentation.js',
+        '/tools/gf-model-pgs-helper.js',
+    )
+    script_bundle = ''.join(
+        f'<script src="{path}?v={GF_MODEL_ASSET_VERSION}"></script>'
+        for path in script_paths
+    )
+    html = html.replace('</body>', f'{script_bundle}</body>', 1)
     return html, 200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store, max-age=0',
@@ -2324,6 +2321,56 @@ def gf_model_minimum_basic_patch():
     response = send_file(
         os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_minimum_basic_patch.js'),
         mimetype='application/javascript',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-single-official-data.js')
+def gf_model_single_official_data():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_single_official_data.js'),
+        mimetype='application/javascript',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-single-experiment.js')
+def gf_model_single_experiment():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_single_experiment.js'),
+        mimetype='application/javascript',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-single-experiment.css')
+def gf_model_single_experiment_css():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_single_experiment.css'),
+        mimetype='text/css',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-payment-plan.js')
+def gf_model_payment_plan():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_payment_plan.js'),
+        mimetype='application/javascript',
+    )
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/tools/gf-model-payment-plan.css')
+def gf_model_payment_plan_css():
+    response = send_file(
+        os.path.join(BASE_DIR, 'assets', 'gf', 'gf_model_payment_plan.css'),
+        mimetype='text/css',
     )
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response

@@ -106,6 +106,14 @@ def validate_medical_financing_payload(payload):
         raise PdfPayloadError("逐年結果必須包含 1 至 100 行。")
 
     issue_age = _integer(raw_input.get("issueAge"), "投保年齡", maximum=99)
+    payment_mode = _text(
+        raw_input.get("paymentMode"),
+        "GF供款方式",
+        maximum=20,
+        fallback="five_year",
+    ).lower()
+    if payment_mode not in {"five_year", "single"}:
+        raise PdfPayloadError("GF供款方式只可為五年供款或一次性繳費。")
     annual = _number(raw_input.get("annual"), "年繳保費", minimum=0.01)
     total = _number(raw_input.get("total"), "五年總保費", minimum=0.01)
     basic = _number(raw_input.get("basic"), "投保時基本金額", minimum=0)
@@ -156,7 +164,13 @@ def validate_medical_financing_payload(payload):
             raise PdfPayloadError("官方醫療保費率必須完整涵蓋 0 至 99 歲。")
     context["premiumByAge"] = premium_by_age
     return {
-        "input": {"issueAge": issue_age, "annual": annual, "total": total, "basic": basic},
+        "input": {
+            "issueAge": issue_age,
+            "annual": annual,
+            "total": total,
+            "basic": basic,
+            "paymentMode": payment_mode,
+        },
         "rows": rows,
         "context": context,
         "generatedAt": datetime.now(timezone.utc),
@@ -355,8 +369,11 @@ def _medical_paid_to_age(data, age):
 
 def _combo_paid_to_age(data, age):
     issue_age = data["input"]["issueAge"]
-    completed_years = max(0, min(5, age - issue_age))
-    gf_paid = data["input"]["annual"] * completed_years
+    if data["input"].get("paymentMode") == "single":
+        gf_paid = data["input"]["total"] if age >= issue_age else 0
+    else:
+        completed_years = max(0, min(5, age - issue_age))
+        gf_paid = data["input"]["annual"] * completed_years
     medical_paid = _medical_paid_to_age(data, age)
     financed_medical = sum(
         min(_premium_at_age(data, row["age"]), row["withdrawal_total"])
@@ -368,6 +385,36 @@ def _combo_paid_to_age(data, age):
 def _milestone_ages(issue_age, first_standard_age):
     first = first_standard_age if issue_age < first_standard_age else min(99, issue_age + 5)
     return sorted({age for age in (first, 65, 85, 99) if issue_age < age <= 99})
+
+
+def _cash_value_milestones(issue_age):
+    candidates = [
+        ("第 10 個保單年度", issue_age + 10),
+        ("第 20 個保單年度", issue_age + 20),
+        ("至 65 歲", 65),
+        ("至 85 歲", 85),
+        ("至 99 歲", 99),
+    ]
+    milestones = []
+    seen_ages = set()
+    for label, age in candidates:
+        if issue_age < age <= 99 and age not in seen_ages:
+            milestones.append((label, age))
+            seen_ages.add(age)
+    return milestones
+
+
+def _delayed_financing_start_age(data):
+    first_financing_row = next(
+        (row for row in data["rows"] if row["requested_withdrawal"] > 0),
+        None,
+    )
+    if first_financing_row is None:
+        return None
+    immediate_start_year = 2 if data["input"].get("paymentMode") == "single" else 6
+    if first_financing_row["policy_year"] <= immediate_start_year:
+        return None
+    return first_financing_row["age"]
 
 
 def _draw_summary_page(c, data, page_no, total_pages):
@@ -393,7 +440,13 @@ def _draw_summary_page(c, data, page_no, total_pages):
     _cell_text(c, "組合計劃", x + widths[0] + widths[1], top - row_heights[0], widths[2], row_heights[0], size=10, bold=True)
     _cell_text(c, "內容", x, y, widths[0], row_heights[1], size=8, bold=True)
     _cell_text(c, plan_label, x + widths[0], y, widths[1], row_heights[1], size=8)
-    combo_label = f"每年 {_money(data['input']['annual'])} 儲蓄\n+\n{plan_label}"
+    single_payment = data["input"].get("paymentMode") == "single"
+    savings_label = (
+        f"一次性 {_money(data['input']['total'])} 儲蓄"
+        if single_payment
+        else f"每年 {_money(data['input']['annual'])} 儲蓄"
+    )
+    combo_label = f"{savings_label}\n+\n{plan_label}"
     _cell_text(c, combo_label, x + widths[0] + widths[1], y, widths[2], row_heights[1], size=7.5)
 
     coverage_height = 49 * mm
@@ -416,7 +469,27 @@ def _draw_summary_page(c, data, page_no, total_pages):
     y = _draw_grid(c, x, contribution_top, widths, [contribution_height], fills, line_width=0.8)
     _cell_text(c, "供款年期\n首年保費", x, y, widths[0], contribution_height, size=8, bold=True)
     _cell_text(c, f"至 99 歲\n{_money(first_medical)}", x + widths[0], y, widths[1], contribution_height, size=8)
-    _cell_text(c, f"5 年\n{_money(data['input']['annual'] + first_medical)}", x + widths[0] + widths[1], y, widths[2], contribution_height, size=8, bold=True)
+    contribution_label = (
+        f"一次性\n{_money(data['input']['total'] + first_medical)}"
+        if single_payment
+        else f"5 年\n{_money(data['input']['annual'] + first_medical)}"
+    )
+    contribution_x = x + widths[0] + widths[1]
+    delayed_start_age = _delayed_financing_start_age(data)
+    if delayed_start_age is None:
+        _cell_text(c, contribution_label, contribution_x, y, widths[2], contribution_height, size=8, bold=True)
+    else:
+        _cell_text(c, contribution_label, contribution_x, y + 5.5 * mm, widths[2], contribution_height - 5.5 * mm, size=8, bold=True)
+        _cell_text(
+            c,
+            f"醫療融資從{delayed_start_age}歲開始",
+            contribution_x,
+            y + 0.8 * mm,
+            widths[2],
+            5.2 * mm,
+            size=5.8,
+            color=colors.HexColor("#C62828"),
+        )
 
     premium_ages = _milestone_ages(issue_age, 25)
     premium_height = 8.5 * mm
@@ -431,15 +504,15 @@ def _draw_summary_page(c, data, page_no, total_pages):
         _cell_text(c, _money(_medical_paid_to_age(data, age)), x + widths[0], row_y, widths[1], premium_height, size=7.5)
         _cell_text(c, _money(_combo_paid_to_age(data, age)), x + widths[0] + widths[1], row_y, widths[2], premium_height, size=7.5, bold=True)
 
-    cash_ages = _milestone_ages(issue_age, 30)
+    cash_milestones = _cash_value_milestones(issue_age)
     cash_top = y
-    y = _draw_grid(c, x, cash_top, widths, [premium_height] * (len(cash_ages) + 1), {(0, 0): PALE_TEAL, (0, 1): PALE_TEAL, (0, 2): PALE_TEAL}, line_width=0.65)
+    y = _draw_grid(c, x, cash_top, widths, [premium_height] * (len(cash_milestones) + 1), {(0, 0): PALE_TEAL, (0, 1): PALE_TEAL, (0, 2): PALE_TEAL}, line_width=0.65)
     for index, label in enumerate(["可提取現金價值", "基本計劃", "組合計劃"]):
         _cell_text(c, label, x + sum(widths[:index]), cash_top - premium_height, widths[index], premium_height, size=8, bold=True)
     row_y = cash_top - premium_height
-    for age in cash_ages:
+    for label, age in cash_milestones:
         row_y -= premium_height
-        _cell_text(c, f"至 {age} 歲", x, row_y, widths[0], premium_height, size=7.5)
+        _cell_text(c, label, x, row_y, widths[0], premium_height, size=7.5)
         _cell_text(c, "—", x + widths[0], row_y, widths[1], premium_height, size=8)
         _cell_text(c, _money(_value_at_age(data["rows"], age, "post_surrender_total")), x + widths[0] + widths[1], row_y, widths[2], premium_height, size=7.5, bold=True)
 

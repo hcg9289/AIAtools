@@ -89,11 +89,18 @@
   function enhanceNotice(result) {
     const notice = document.getElementById('financeNotice');
     if (!notice) return;
-    const annual = document.createElement('div');
-    const total = document.createElement('div');
-    annual.textContent = `年繳保費：USD ${formatMoney(result?.input?.annual)}`;
-    total.textContent = `五年總保費：USD ${formatMoney(result?.input?.total)}`;
-    notice.replaceChildren(annual, total);
+    const paymentMode = result?.input?.paymentMode || result?.paymentMode || 'five_year';
+    if (paymentMode === 'single') {
+      const single = document.createElement('div');
+      single.textContent = `一次性繳費：USD ${formatMoney(result?.input?.singlePremium ?? result?.input?.total)}`;
+      notice.replaceChildren(single);
+    } else {
+      const annual = document.createElement('div');
+      const total = document.createElement('div');
+      annual.textContent = `年繳保費：USD ${formatMoney(result?.input?.annual)}`;
+      total.textContent = `五年總保費：USD ${formatMoney(result?.input?.total)}`;
+      notice.replaceChildren(annual, total);
+    }
     notice.className = 'notice gf-premium-notice';
   }
 
@@ -236,7 +243,10 @@
   function resetPremiumNotice() {
     const notice = document.getElementById('financeNotice');
     if (!notice) return;
-    notice.textContent = '輸入醫療保費表後按「開始計算」。提款最早只可在第 6 保單年度年末進行。';
+    const single = document.getElementById('gfPaymentPlan')?.value === 'single';
+    notice.textContent = single
+      ? '輸入醫療保費表後按「開始計算」。一次性繳費最早只可在第 2 保單年度年末提款。'
+      : '輸入醫療保費表後按「開始計算」。五年供款最早只可在第 6 保單年度年末提款。';
     notice.className = 'notice warn';
   }
 

@@ -140,6 +140,17 @@
       assert(!document.getElementById('financeNotice').textContent.includes('baseline'), '仍顯示舊有研究說明');
     });
 
+    test('一次性繳費只顯示一項保費', () => {
+      const singleResult = {
+        ...result,
+        input: { annual: 35557.83, total: 35557.83, singlePremium: 35557.83, paymentMode: 'single' },
+      };
+      renderFinanceResult(singleResult);
+      const lines = Array.from(document.querySelectorAll('#financeNotice > div')).map((line) => line.textContent);
+      assert(lines.join('|') === '一次性繳費：USD 35,558', `一次性保費說明錯誤：${lines}`);
+      renderFinanceResult(result);
+    });
+
     test('醫療融資CSV與UI同樣截止99歲', () => {
       const csv = financeCsvText(result);
       assert(csv.includes('"99","71","2000","3000"'), 'CSV欠缺99歲');
