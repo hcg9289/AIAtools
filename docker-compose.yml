@@ -4,6 +4,8 @@ services:
     container_name: ppt_generator
     # Level 3: Property Lockdown - UID 1008 non-root user
     user: "1008:1008"
+    group_add:
+      - "2008"
     # Level 2: Instruction Lockdown
     security_opt:
       - no-new-privileges:true
@@ -24,8 +26,10 @@ services:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
       - ./research:/app/research:ro
+      - /home/ubuntu/portal-auth-secret:/run/secrets/portal_service_key:ro
     environment:
       - VAULT_AI_URL=http://wa-vault-1006:5001
+      - PORTAL_SERVICE_KEY_FILE=/run/secrets/portal_service_key
     restart: unless-stopped
     networks:
       - VPS-net

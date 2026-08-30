@@ -4,6 +4,8 @@ import json
 import base64
 import uuid
 import re
+import hmac
+import hashlib
 import threading
 import subprocess
 import requests
@@ -15,8 +17,8 @@ try:
     import pytesseract
 except ImportError:  # pragma: no cover - runtime dependency is installed in Docker
     pytesseract = None
-from datetime import datetime, timedelta
-from flask import Flask, render_template, request, jsonify, send_file, redirect
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_file, redirect, g
 from xml.sax.saxutils import escape
 from werkzeug.utils import secure_filename
 from pptx import Presentation
@@ -43,15 +45,49 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VAULT_AI_URL = os.environ.get('VAULT_AI_URL', 'http://wa-vault-1006:5001')
 PPT_AI_ENDPOINT = f"{VAULT_AI_URL}/api/v1/ai/ppt/1008"
 PPT_GENERATE_ENDPOINT = f"{VAULT_AI_URL}/api/v1/ai/ppt/generate"
-VAULT_AUTH_URL = os.environ.get('VAULT_AUTH_URL', 'http://wa-vault-1006:5001/api/v1/token/validate')
 SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', str(20 * 60)))
-AUTH_SESSIONS = {}  # {sid: {"uid": str, "expiry": datetime, "ott": str}}
+VAULT_PORTAL_EXCHANGE_URL = os.environ.get(
+    'VAULT_PORTAL_EXCHANGE_URL',
+    f'{VAULT_AI_URL}/api/v1/portal/session/exchange',
+)
+VAULT_PORTAL_VALIDATE_URL = os.environ.get(
+    'VAULT_PORTAL_VALIDATE_URL',
+    f'{VAULT_AI_URL}/api/v1/portal/session/validate',
+)
+VAULT_PORTAL_LAUNCH_URL = os.environ.get(
+    'VAULT_PORTAL_LAUNCH_URL',
+    f'{VAULT_AI_URL}/api/v1/portal/launch',
+)
+PORTAL_SERVICE_KEY_FILE = os.environ.get(
+    'PORTAL_SERVICE_KEY_FILE',
+    '/run/secrets/portal_service_key',
+)
+PORTAL_AUDIENCE = '1008'
+PORTAL_COOKIE_NAME = 'portal_session'
+PORTAL_LAUNCH_TARGETS = {
+    '1003': 'https://tax.alpha-family.net/',
+    '1004': 'https://ia.alpha-family.net/',
+    '1005': 'https://policy.alpha-family.net/',
+}
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'ppt', 'pptx'}
 PREVIEW_BOTS = ['WhatsApp', 'facebookexternalhit', 'Twitterbot', 'LinkedInBot', 'Slackbot']
 VAULT_AUTH_TIMEOUT_SECONDS = 15
-VAULT_AUTH_RETRY_ATTEMPTS = 2
-VAULT_AUTH_RETRY_BACKOFF_SECONDS = 0.4
 AUTH_RETRY_PAGE_SECONDS = 2
+
+
+def _load_portal_service_key():
+    try:
+        with open(PORTAL_SERVICE_KEY_FILE, 'r', encoding='utf-8') as key_file:
+            key = key_file.read().strip()
+            if key:
+                return key
+    except OSError:
+        pass
+    # Environment fallback exists for tests and local development only.
+    return os.environ.get('PORTAL_SERVICE_KEY', '').strip()
+
+
+PORTAL_SERVICE_KEY = _load_portal_service_key()
 
 # Async task store — {task_id: {"status": "processing"|"done"|"error", "result": dict, "created": datetime}}
 TASKS = {}
@@ -113,19 +149,6 @@ def _cleanup_old_tasks():
             del TASKS[k]
 
 
-def get_client_ip():
-    cf_ip = request.headers.get('cf-connecting-ip')
-    if cf_ip:
-        return cf_ip.strip()
-    forwarded = request.headers.get('x-forwarded-for')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    real_ip = request.headers.get('x-real-ip')
-    if real_ip:
-        return real_ip.strip()
-    return request.remote_addr or '127.0.0.1'
-
-
 def expects_json_response():
     accept = request.headers.get('Accept', '').lower()
     return request.path.startswith('/api/') or request.is_json or 'application/json' in accept or request.method != 'GET'
@@ -164,55 +187,69 @@ def auth_retry_response(status_code, message):
     )
 
 
-def is_vault_timeout_error(exc):
-    return isinstance(exc, requests.exceptions.Timeout) or 'timeout' in str(exc).lower() or 'timed out' in str(exc).lower()
+def _portal_headers():
+    if not PORTAL_SERVICE_KEY:
+        return None
+    return {'X-Portal-Service-Key': PORTAL_SERVICE_KEY}
 
 
-def validate_vault_ott(ott):
-    token_prefix = (ott or '')[:8]
-    real_ip = get_client_ip()
-    request_id = uuid.uuid4().hex
-    saw_timeout = False
+def _portal_post(url, payload):
+    """Call a fail-closed 1006 portal endpoint without logging bearer material."""
+    headers = _portal_headers()
+    if not headers:
+        return 'misconfigured', None
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=VAULT_AUTH_TIMEOUT_SECONDS,
+        )
+    except requests.exceptions.Timeout:
+        return 'timeout', None
+    except requests.exceptions.RequestException:
+        return 'temporary_error', None
 
-    for attempt in range(1, VAULT_AUTH_RETRY_ATTEMPTS + 1):
+    if response.status_code == 200:
         try:
-            resp = requests.get(
-                VAULT_AUTH_URL,
-                params={'token': ott, 'request_id': request_id},
-                headers={'CF-Connecting-IP': real_ip},
-                timeout=VAULT_AUTH_TIMEOUT_SECONDS
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get('valid'):
-                    app.logger.info('OTT validation result=valid token_prefix=%s attempt=%s real_ip=%s vault_code=%s', token_prefix, attempt, real_ip, resp.status_code)
-                    return 'valid', data, attempt
-                result = 'auth_uncertain' if saw_timeout else 'invalid'
-                app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s vault_code=%s', result, token_prefix, attempt, real_ip, resp.status_code)
-                return result, data, attempt
-            if resp.status_code in (401, 403):
-                result = 'auth_uncertain' if saw_timeout else 'invalid'
-                app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s vault_code=%s', result, token_prefix, attempt, real_ip, resp.status_code)
-                return result, None, attempt
-            if resp.status_code >= 500 and attempt < VAULT_AUTH_RETRY_ATTEMPTS:
-                app.logger.info('OTT validation result=temporary_error_retry token_prefix=%s attempt=%s real_ip=%s vault_code=%s', token_prefix, attempt, real_ip, resp.status_code)
-                time.sleep(VAULT_AUTH_RETRY_BACKOFF_SECONDS * attempt)
-                continue
-            app.logger.info('OTT validation result=temporary_error token_prefix=%s attempt=%s real_ip=%s vault_code=%s', token_prefix, attempt, real_ip, resp.status_code)
-            return 'temporary_error', None, attempt
-        except Exception as exc:
-            if is_vault_timeout_error(exc):
-                saw_timeout = True
-                result = 'timeout_retry' if attempt < VAULT_AUTH_RETRY_ATTEMPTS else 'timeout'
-                app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s exception=%s', result, token_prefix, attempt, real_ip, type(exc).__name__)
-                if attempt < VAULT_AUTH_RETRY_ATTEMPTS:
-                    time.sleep(VAULT_AUTH_RETRY_BACKOFF_SECONDS * attempt)
-                    continue
-                return 'timeout', None, attempt
-            result = 'auth_uncertain' if saw_timeout else 'temporary_error'
-            app.logger.info('OTT validation result=%s token_prefix=%s attempt=%s real_ip=%s exception=%s', result, token_prefix, attempt, real_ip, type(exc).__name__)
-            return result, None, attempt
-    return ('auth_uncertain' if saw_timeout else 'temporary_error'), None, VAULT_AUTH_RETRY_ATTEMPTS
+            data = response.json()
+        except ValueError:
+            return 'temporary_error', None
+        if data.get('valid'):
+            return 'valid', data
+        return 'invalid', data
+    if response.status_code in (401, 403):
+        return 'invalid', None
+    return 'temporary_error', None
+
+
+def exchange_portal_ott(ott):
+    return _portal_post(
+        VAULT_PORTAL_EXCHANGE_URL,
+        {'ott': ott, 'audience': PORTAL_AUDIENCE},
+    )
+
+
+def validate_portal_session(session_token):
+    return _portal_post(
+        VAULT_PORTAL_VALIDATE_URL,
+        {'session_token': session_token},
+    )
+
+
+def create_portal_launch_ticket(session_token, audience):
+    return _portal_post(
+        VAULT_PORTAL_LAUNCH_URL,
+        {'session_token': session_token, 'audience': audience},
+    )
+
+
+def portal_csrf_token(session_token):
+    return hmac.new(
+        PORTAL_SERVICE_KEY.encode('utf-8'),
+        f'1008-launch:{session_token}'.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 @app.before_request
@@ -228,35 +265,53 @@ def verify_ott_access():
             return jsonify({'success': False, 'error': 'Unauthorized'}), 403
         return (
             '<!DOCTYPE html><html><head><meta charset="utf-8">'
-            '<title>PPT Generator</title>'
-            '<meta property="og:title" content="PPT Generator"/>'
-            '<meta property="og:description" content="請透過 WhatsApp 取得專屬連結後使用。"/>'
+            '<title>AIAtools</title>'
+            '<meta property="og:title" content="AIAtools"/>'
+            '<meta property="og:description" content="AIA 專用工具入口；請透過 WhatsApp 取得專屬連結後使用。"/>'
             '</head><body></body></html>',
             200,
             {'Content-Type': 'text/html; charset=utf-8'}
         )
 
-    sid = request.cookies.get('auth_sid')
-    if sid:
-        session = AUTH_SESSIONS.get(sid)
-        if session and session['expiry'] > datetime.now():
+    session_token = request.cookies.get(PORTAL_COOKIE_NAME)
+    if session_token:
+        status, data = validate_portal_session(session_token)
+        if status == 'valid':
+            g.portal_session_token = session_token
+            g.portal_session = data
             return
+        if status not in ('invalid',):
+            return auth_retry_response(
+                status,
+                '中央登入服務暫時未確認，請稍後重新整理。',
+            )
 
     ott = request.args.get('ott')
     if ott:
         try:
-            status, data, attempt = validate_vault_ott(ott)
+            status, data = exchange_portal_ott(ott)
             if status == 'valid':
-                new_sid = str(uuid.uuid4())
-                AUTH_SESSIONS[new_sid] = {
-                    'uid': data.get('uid'),
-                    'tool': data.get('tool'),
-                    'ip': data.get('ip'),
-                    'expiry': datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS),
-                }
-                clean_url = request.path
-                out = redirect(clean_url)
-                out.set_cookie('auth_sid', new_sid, max_age=SESSION_TTL_SECONDS, httponly=True, samesite='Lax')
+                session_token = str(data.get('session_token') or '')
+                expires_in = int(data.get('expires_in') or 0)
+                if not session_token or expires_in <= 0:
+                    return auth_retry_response(
+                        'temporary_error',
+                        '中央登入服務回應不完整，請稍後重試同一條連結。',
+                    )
+                expires_in = min(expires_in, SESSION_TTL_SECONDS)
+                out = redirect(request.path, code=303)
+                out.set_cookie(
+                    PORTAL_COOKIE_NAME,
+                    session_token,
+                    max_age=expires_in,
+                    secure=True,
+                    httponly=True,
+                    samesite='Lax',
+                    path='/',
+                )
+                out.delete_cookie('auth_sid', path='/')
+                out.headers['Cache-Control'] = 'no-store, max-age=0'
+                out.headers['Referrer-Policy'] = 'no-referrer'
                 return out
             if status == 'invalid':
                 return auth_forbidden_response('OTT 連結已失效，請從 WhatsApp 重新取得工具連結。')
@@ -2248,7 +2303,43 @@ def _run_gf_task(task_id, pdf_path, client_name, agent_name, withdrawal_mode):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template(
+        'index.html',
+        launch_csrf=portal_csrf_token(g.portal_session_token),
+        session_expires_at=g.portal_session.get('expires_at'),
+    )
+
+
+@app.route('/launch/<tool_id>', methods=['POST'])
+def launch_portal_tool(tool_id):
+    target_url = PORTAL_LAUNCH_TARGETS.get(tool_id)
+    if not target_url:
+        return auth_forbidden_response('不允許開啟這個工具。')
+
+    supplied_csrf = request.form.get('csrf_token', '')
+    expected_csrf = portal_csrf_token(g.portal_session_token)
+    if not supplied_csrf or not hmac.compare_digest(supplied_csrf, expected_csrf):
+        return auth_forbidden_response('安全驗證失敗，請返回 AIAtools 後再試。')
+
+    status, data = create_portal_launch_ticket(g.portal_session_token, tool_id)
+    if status == 'invalid':
+        return auth_forbidden_response('登入或工具啟動授權已失效，請重新進入 AIAtools。')
+    if status != 'valid':
+        return auth_retry_response(status, '工具啟動服務暫時未確認，請稍後再試。')
+
+    ticket = str(data.get('ticket') or '')
+    if data.get('audience') != tool_id or not re.fullmatch(r'[A-Za-z0-9_-]{20,512}', ticket):
+        return auth_retry_response(
+            'temporary_error',
+            '工具啟動服務回應不完整，請稍後再試。',
+        )
+
+    # target_url comes only from the server-side allowlist; user input never
+    # controls the redirect origin or path.
+    response = redirect(f'{target_url}?launch={ticket}', code=303)
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
 
 
 @app.route('/tools/gf')
@@ -2433,11 +2524,12 @@ def cold_call_list_tool():
 
 @app.route('/api/ping')
 def ping():
-    """Session keepalive — called by frontend every 60s to refresh session TTL."""
-    sid = request.cookies.get('auth_sid')
-    if sid and sid in AUTH_SESSIONS:
-        AUTH_SESSIONS[sid]['expiry'] = datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS)
-    return jsonify({'ok': True})
+    """Read-only session check; never extends the fixed portal expiry."""
+    return jsonify({
+        'ok': True,
+        'expires_at': g.portal_session.get('expires_at'),
+        'expires_in': g.portal_session.get('expires_in'),
+    })
 
 
 @app.route('/api/task/<task_id>')
