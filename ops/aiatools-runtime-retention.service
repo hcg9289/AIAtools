@@ -1,0 +1,13 @@
+[Unit]
+Description=Remove expired AIAtools generated runtime files
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+ExecStart=/usr/bin/python3 /home/ubuntu/AIAtools/ops/runtime_retention.py --days 30 /home/ubuntu/AIAtools/uploads /home/ubuntu/AIAtools/outputs /home/ubuntu/tax_receipt/uploads /home/ubuntu/tax_receipt/outputs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/AIAtools/uploads /home/ubuntu/AIAtools/outputs /home/ubuntu/tax_receipt/uploads /home/ubuntu/tax_receipt/outputs

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily AIAtools runtime file retention
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Hong_Kong
+Persistent=true
+RandomizedDelaySec=10m
+Unit=aiatools-runtime-retention.service
+
+[Install]
+WantedBy=timers.target

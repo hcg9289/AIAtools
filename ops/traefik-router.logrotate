@@ -1,0 +1,11 @@
+/opt/traefik-router/logs/*.log {
+    daily
+    maxsize 10M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}
