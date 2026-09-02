@@ -42,7 +42,14 @@ def sample_payload(row_count=71):
         })
     return {
         "result": {
-            "input": {"issueAge": 28, "annual": 4714, "total": 23570, "basic": 47617},
+            "input": {
+                "issueAge": 28,
+                "medicalStartAge": 34,
+                "medicalEndAge": 28 + row_count,
+                "annual": 4714,
+                "total": 23570,
+                "basic": 47617,
+            },
             "rows": rows,
         },
         "medicalContext": {
@@ -73,6 +80,12 @@ def main():
         ("至 85 歲", 85),
         ("至 99 歲", 99),
     ], "同一歲數的保單年度及固定年齡不應重複顯示"
+    assert _cash_value_milestones(28, 80) == [
+        ("第 10 個保單年度", 38),
+        ("第 20 個保單年度", 48),
+        ("至 65 歲", 65),
+        ("至 80 歲", 80),
+    ], "自訂終止年齡不應繼續顯示85或99歲"
     print("PASS 可提取現金價值採用第10／20保單年度及65／85／99歲里程碑")
 
     immediate_five = validate_medical_financing_payload(sample_payload())
@@ -205,6 +218,23 @@ def main():
     else:
         raise AssertionError("沒有拒絕超過 100 行的資料")
     print("PASS PDF payload 行數限制")
+
+    missing_last_age = sample_payload()
+    missing_last_age["result"]["rows"].pop()
+    try:
+        build_medical_financing_pdf(missing_last_age)
+    except PdfPayloadError as exc:
+        assert "完整涵蓋" in str(exc), str(exc)
+    else:
+        raise AssertionError("沒有拒絕欠缺用戶設定終止年齡的PDF資料")
+    print("PASS PDF拒絕靜默遺失用戶設定的最後一年")
+
+    end_at_80 = sample_payload(row_count=52)
+    end_at_80_reader = PdfReader(build_medical_financing_pdf(end_at_80))
+    end_at_80_summary = end_at_80_reader.pages[-1].extract_text() or ""
+    assert "至 80 歲" in end_at_80_summary, "PDF總結沒有使用用戶設定的80歲終止年齡"
+    assert "至 85 歲" not in end_at_80_summary and "至 99 歲" not in end_at_80_summary, "PDF總結仍超出用戶設定年齡"
+    print("PASS PDF總結嚴格使用用戶設定的終止年齡")
 
 
 if __name__ == "__main__":

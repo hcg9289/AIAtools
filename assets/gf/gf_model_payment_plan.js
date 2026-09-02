@@ -8,9 +8,16 @@
   const fiveCore = window.GFFinanceCore;
   const singleRender = window.renderFinanceResult;
   const singleCsv = window.financeCsvText;
+  const fiveCsv = fiveCore?.financeCsvText;
   const sharedInvalidate = window.invalidateFinanceResult;
 
-  if (!singleApi || !fiveCore || typeof singleRender !== 'function' || typeof singleCsv !== 'function') {
+  if (
+    !singleApi
+    || !fiveCore
+    || typeof singleRender !== 'function'
+    || typeof singleCsv !== 'function'
+    || typeof fiveCsv !== 'function'
+  ) {
     throw new Error('GF 雙計劃切換無法連接五年及一次性繳費模型。');
   }
 
@@ -32,6 +39,61 @@
     return result;
   }
 
+  function requestedMedicalRange(medicalRows) {
+    if (!Array.isArray(medicalRows) || !medicalRows.length) {
+      throw new Error('醫療保費年期不完整，請重新計算。');
+    }
+    const ages = medicalRows.map((row) => Number(row?.age));
+    if (ages.some((age) => !Number.isInteger(age))) {
+      throw new Error('醫療保費年齡必須是完整整數。');
+    }
+    for (let index = 1; index < ages.length; index += 1) {
+      if (ages[index] !== ages[index - 1] + 1) {
+        throw new Error(`醫療保費年期在 ${ages[index - 1]} 至 ${ages[index]} 歲之間不連續。`);
+      }
+    }
+    return { startAge: ages[0], endAge: ages.at(-1) };
+  }
+
+  function prepareResult(result, paymentMode, medicalRows) {
+    if (!result?.input || !Array.isArray(result.rows)) {
+      throw new Error('GF 計算結果不完整，請重新計算。');
+    }
+    const { startAge, endAge } = requestedMedicalRange(medicalRows);
+    const issueAge = Number(result.input.issueAge);
+    if (!Number.isInteger(issueAge) || endAge <= issueAge) {
+      throw new Error('GF 投保年齡或醫療保費終止年齡不正確。');
+    }
+
+    const outputRows = result.rows.filter((row) => {
+      const age = Number(row?.age);
+      return age > issueAge && age <= endAge;
+    });
+    const expectedCount = endAge - issueAge;
+    if (outputRows.length !== expectedCount) {
+      throw new Error(`逐年結果未完整涵蓋 ${issueAge + 1} 至 ${endAge} 歲。`);
+    }
+    outputRows.forEach((row, index) => {
+      const expectedAge = issueAge + index + 1;
+      const expectedPolicyYear = index + 1;
+      if (Number(row.age) !== expectedAge || Number(row.policy_year) !== expectedPolicyYear) {
+        throw new Error(`逐年結果欠缺或錯置 ${expectedAge} 歲資料。`);
+      }
+    });
+    medicalRows.forEach((row) => {
+      const policyYear = Number(row.age) - issueAge;
+      const scheduled = Number(result.schedule?.[policyYear]);
+      if (!Number.isFinite(scheduled) || Math.abs(scheduled - Number(row.medicalPremium)) > 0.01) {
+        throw new Error(`${row.age} 歲醫療保費未正確套用到逐年結果。`);
+      }
+    });
+
+    result.input.medicalStartAge = startAge;
+    result.input.medicalEndAge = endAge;
+    result.requestedMedicalRange = { startAge, endAge };
+    return tagResult(result, paymentMode);
+  }
+
   function readMedicalInputs(paymentMode) {
     const issueAge = Number(document.getElementById('issueAge').value);
     const startAge = Number(document.getElementById('medicalStartAge').value);
@@ -44,7 +106,11 @@
       : parseMedicalPremiumSchedule(document.getElementById('medicalPremiumTable').value, startAge, endAge);
     if (paymentMode === SINGLE) singleApi.validateMedicalInputs(issueAge, medicalRows);
     else fiveCore.validateMedicalInputs(issueAge, medicalRows);
-    return { issueAge, medicalRows, context };
+    return {
+      issueAge,
+      medicalRows,
+      context: { ...context, requestedStartAge: startAge, requestedEndAge: endAge },
+    };
   }
 
   function renderFiveYearResult(result, proof = null) {
@@ -119,7 +185,7 @@
   function combinedCsv(result, medicalContext) {
     const paymentMode = result?.input?.paymentMode || result?.paymentMode || activePlan();
     if (paymentMode === SINGLE) return singleCsv(result, medicalContext);
-    return fiveCore.financeCsvText(result, medicalContext);
+    return fiveCsv(result, medicalContext);
   }
 
   function dispatchInvalidate() {
@@ -150,24 +216,24 @@
         if (mode === 'minimum') {
           const proof = singleApi.findMinimumSinglePremium(issueAge, medicalRows);
           proof.result.calculationMode = 'minimum_single';
-          dispatchRender(tagResult(proof.result, SINGLE), proof);
+          dispatchRender(prepareResult(proof.result, SINGLE, medicalRows), proof);
         } else {
           const premium = Number(document.getElementById('fixedAnnualPremium').value);
           if (!Number.isInteger(premium) || premium <= 0) throw new Error('一次性繳費請輸入大於 0 的整數美元。');
           const result = singleApi.simulateSinglePremium(premium, issueAge, medicalRows);
           result.calculationMode = 'fixed_single';
-          dispatchRender(tagResult(result, SINGLE));
+          dispatchRender(prepareResult(result, SINGLE, medicalRows));
         }
       } else if (mode === 'minimum') {
         const proof = fiveCore.findMinimumAnnualPremium(issueAge, medicalRows);
         proof.result.calculationMode = 'minimum_five_year';
-        dispatchRender(tagResult(proof.result, FIVE_YEAR), proof);
+        dispatchRender(prepareResult(proof.result, FIVE_YEAR, medicalRows), proof);
       } else {
         const annual = Number(document.getElementById('fixedAnnualPremium').value);
         if (!Number.isFinite(annual) || annual <= 0) throw new Error('請輸入大於 0 的 GF 年繳保費。');
         const result = fiveCore.simulateMedicalFinancing(annual, issueAge, medicalRows);
         result.calculationMode = 'fixed_five_year';
-        dispatchRender(tagResult(result, FIVE_YEAR));
+        dispatchRender(prepareResult(result, FIVE_YEAR, medicalRows));
       }
     } catch (value) {
       dispatchInvalidate();
@@ -245,6 +311,8 @@
     SINGLE,
     activePlan,
     tagResult,
+    requestedMedicalRange,
+    prepareResult,
     readMedicalInputs,
     runCombinedFinance,
     updatePlanUi,

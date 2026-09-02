@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PAGE = ROOT / "gf_presentation_patch_harness.html"
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-EXPECTED_TESTS = 11
+EXPECTED_TESTS = 13
 
 
 def main() -> None:

@@ -20,9 +20,33 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  function requestedEndAge(result) {
+    const configured = Number(result?.input?.medicalEndAge);
+    return Number.isInteger(configured) && configured >= 0
+      ? Math.min(configured, MAX_DISPLAY_AGE)
+      : MAX_DISPLAY_AGE;
+  }
+
   function visibleRows(result) {
     if (!Array.isArray(result?.rows)) return [];
-    return result.rows.filter((row) => Number(row?.age) <= MAX_DISPLAY_AGE);
+    const endAge = requestedEndAge(result);
+    const rows = result.rows.filter((row) => Number(row?.age) <= endAge);
+    if (Number.isInteger(Number(result?.input?.medicalEndAge))) {
+      const issueAge = Number(result?.input?.issueAge);
+      const expectedCount = endAge - issueAge;
+      if (
+        !Number.isInteger(issueAge)
+        || expectedCount < 1
+        || rows.length !== expectedCount
+        || rows.some((row, index) => (
+          Number(row?.age) !== issueAge + index + 1
+          || Number(row?.policy_year) !== index + 1
+        ))
+      ) {
+        throw new Error(`逐年結果未完整顯示至用戶設定的 ${endAge} 歲。`);
+      }
+    }
+    return rows;
   }
 
   function visibleResult(result) {
@@ -45,7 +69,7 @@
       surrendered: Boolean(surrenderRow),
       surrenderYear: surrenderRow ? number(surrenderRow.policy_year) : null,
       presentationVersion: PRESENTATION_VERSION,
-      maximumDisplayedAge: MAX_DISPLAY_AGE,
+      maximumDisplayedAge: requestedEndAge(result),
     };
   }
 
@@ -68,13 +92,14 @@
     const summary = document.getElementById('financeSummary');
     if (!summary) return;
     const display = visibleResult(result);
+    const endAge = display.maximumDisplayedAge;
     updateMetric(summary, '醫療保費總額', `USD ${formatMoney(display.requestedTotal)}`);
     updateMetric(summary, '實際累計提款', `USD ${formatMoney(display.actualTotal)}`);
     updateMetric(
       summary,
       '最終狀態',
       display.surrendered ? `第 ${display.surrenderYear} 年退保` : '保單持續',
-      '截至 99 歲狀態',
+      `截至 ${endAge} 歲狀態`,
     );
     const title = document.createElement('div');
     title.className = 'gf-summary-title';
@@ -83,7 +108,7 @@
     summary.setAttribute('role', 'table');
     summary.querySelectorAll('.metric').forEach((metric) => metric.setAttribute('role', 'row'));
     summary.dataset.presentationVersion = PRESENTATION_VERSION;
-    summary.dataset.maximumAge = String(MAX_DISPLAY_AGE);
+    summary.dataset.maximumAge = String(endAge);
   }
 
   function enhanceNotice(result) {
@@ -187,7 +212,7 @@
     table.prepend(group);
   }
 
-  function enhanceTable() {
+  function enhanceTable(result) {
     const table = document.getElementById('financeTable');
     if (!table) return;
     const valueLabels = normalizeProposalColumns(table);
@@ -195,7 +220,7 @@
     installColumnWidths(table);
     table.querySelectorAll('tbody tr').forEach((row) => {
       const age = Number(row.cells[0]?.textContent.replace(/,/g, '').trim());
-      if (Number.isFinite(age) && age > MAX_DISPLAY_AGE) {
+      if (Number.isFinite(age) && age > requestedEndAge(result)) {
         row.remove();
         return;
       }
@@ -207,14 +232,15 @@
       }
     });
     table.dataset.presentationVersion = PRESENTATION_VERSION;
-    table.dataset.maximumAge = String(MAX_DISPLAY_AGE);
+    const endAge = requestedEndAge(result);
+    table.dataset.maximumAge = String(endAge);
     table.setAttribute('aria-label', 'GF 醫療融資逐年建議表');
     table.closest('.tableWrap')?.classList.add('gf-finance-table-wrap');
 
     const notice = document.getElementById('financeAgeLimitNote') || document.createElement('p');
     notice.id = 'financeAgeLimitNote';
     notice.className = 'gf-age-limit-note';
-    notice.textContent = '逐年結果及下載 CSV 顯示至被保人 99 歲。';
+    notice.textContent = `逐年結果及下載顯示至用戶設定的 ${endAge} 歲。`;
     table.closest('.tableWrap')?.after(notice);
   }
 
@@ -339,14 +365,15 @@
     const value = originalRenderFinanceResult.call(this, result, ...args);
     enhanceSummary(result);
     enhanceNotice(result);
-    enhanceTable();
+    enhanceTable(result);
     setResultsVisible(true);
     setDownloadActionsVisible(true);
     return value;
   }
 
   function patchedFinanceCsvText(result, ...args) {
-    const csv = originalFinanceCsvText.call(this, visibleResult(result), ...args);
+    const display = visibleResult(result);
+    const csv = originalFinanceCsvText.call(this, display, ...args);
     if (typeof csv !== 'string') return csv;
     const newline = csv.includes('\r\n') ? '\r\n' : '\n';
     const hasBom = csv.startsWith('\uFEFF');
@@ -358,7 +385,8 @@
       insertAt,
       0,
       `"presentation_version","${PRESENTATION_VERSION}"`,
-      `"maximum_display_age","${MAX_DISPLAY_AGE}"`,
+      `"requested_medical_end_age","${display.maximumDisplayedAge}"`,
+      `"maximum_display_age","${display.maximumDisplayedAge}"`,
     );
     return `${hasBom ? '\uFEFF' : ''}${lines.join(newline)}`;
   }
@@ -373,6 +401,7 @@
   window.GFPresentationPatch = Object.freeze({
     PRESENTATION_VERSION,
     MAX_DISPLAY_AGE,
+    requestedEndAge,
     visibleRows,
     visibleResult,
     buildMedicalContextForPdf,

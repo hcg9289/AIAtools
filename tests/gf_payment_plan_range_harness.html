@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-TW">
+<body>
+  <div class="top"><h1></h1><p></p></div><div class="badge"></div><div class="experiment-banner"></div>
+  <main class="panel"><div class="finance-form"><h2></h2>
+    <select id="financeMode"><option value="minimum">minimum</option><option value="fixed">fixed</option></select>
+    <div id="fixedPremiumWrap"><label for="fixedAnnualPremium"></label><input id="fixedAnnualPremium" value="20000"></div>
+    <input id="issueAge" value="28"><input id="medicalStartAge" value="35"><input id="medicalEndAge" value="99">
+    <select id="medicalPremiumSource"><option value="table" selected>table</option></select>
+    <input id="medicalPremiumTable"><button id="financeRun" type="button">run</button>
+  </div></main>
+  <div id="financeError" hidden></div><div id="financeSummary"></div><div id="financeNotice"></div>
+  <table id="financeTable"></table><button id="financeDownload" disabled></button><div class="advanced"></div>
+  <script>
+    let currentFinanceResult = null, currentMinimumProof = null, currentMedicalContext = null;
+    function clearElement(node) { node.replaceChildren(); }
+    function appendMetric() {}
+    function appendCell(row, value, tag = 'td') { const cell = document.createElement(tag); cell.textContent = value; row.append(cell); }
+    function fmt(value) { return String(value); }
+    function financeComponentMode() { return 'total'; }
+    function invalidateFinanceResult() { currentFinanceResult = null; }
+    function renderFinanceResult(result) { currentFinanceResult = result; }
+    function financeCsvText() { return 'five-original'; }
+    function selectedMedicalTableContext() { return { source: 'table', planId: 'fixture', formId: 'fixture', deductibleId: 'fixture' }; }
+    function medicalRowsFromTable(_plan, _form, _deductible, startAge, endAge) {
+      return Array.from({ length: endAge - startAge + 1 }, (_, index) => ({ age: startAge + index, medicalPremium: 1000 + index }));
+    }
+    function parseMedicalPremiumSchedule() { return []; }
+    function fullResult(issueAge = 28) {
+      const schedule = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [index + 1, 0]));
+      medicalRowsFromTable('', '', '', 35, 99).forEach((row) => { schedule[row.age - issueAge] = row.medicalPremium; });
+      return {
+        input: { issueAge, annual: 20000, total: 100000, basic: 200000 }, schedule,
+        rows: Array.from({ length: 100 }, (_, index) => ({
+          age: issueAge + index + 1, policy_year: index + 1, requested_withdrawal: schedule[index + 1],
+          withdrawal_total: schedule[index + 1], cumulative_withdrawal: 0, post_surrender_total: 1, status: '正常',
+        })),
+      };
+    }
+    const GFFinanceCore = {
+      validateMedicalInputs() {},
+      financeCsvText,
+      findMinimumAnnualPremium() { return { result: fullResult(), annualPremium: 1, lowerPremium: 0 }; },
+      simulateMedicalFinancing() { return fullResult(); },
+    };
+    const GFSingleExperiment = {
+      validateMedicalInputs() {},
+      findMinimumSinglePremium() { return { result: fullResult(), singlePremium: 1, lowerPremium: 0 }; },
+      simulateSinglePremium() { return fullResult(); },
+    };
+    window.GFFinanceCore = GFFinanceCore;
+    window.GFSingleExperiment = GFSingleExperiment;
+  </script>
+  <script src="../assets/gf/gf_model_payment_plan.js"></script>
+  <script>
+    const results = [];
+    function test(name, fn) { try { fn(); results.push(`PASS ${name}`); } catch (error) { results.push(`FAIL ${name}: ${error.message}`); } }
+    function assert(value, message) { if (!value) throw new Error(message); }
+    const medical = medicalRowsFromTable('', '', '', 35, 99);
+
+    test('完整結果保存用戶設定年期且不改數字', () => {
+      const result = fullResult();
+      const numericSnapshot = JSON.stringify({ rows: result.rows, schedule: result.schedule, annual: result.input.annual, total: result.input.total, basic: result.input.basic });
+      GFPaymentPlan.prepareResult(result, 'five_year', medical);
+      assert(result.input.medicalStartAge === 35 && result.input.medicalEndAge === 99, '年期metadata錯誤');
+      assert(JSON.stringify({ rows: result.rows, schedule: result.schedule, annual: result.input.annual, total: result.input.total, basic: result.input.basic }) === numericSnapshot, '計算數字被改寫');
+    });
+
+    test('欠缺99歲結果會被識別而不會靜默當98歲', () => {
+      const result = fullResult(); result.rows = result.rows.filter((row) => row.age !== 99);
+      let failed = false; try { GFPaymentPlan.prepareResult(result, 'five_year', medical); } catch (error) { failed = error.message.includes('完整涵蓋'); }
+      assert(failed, '欠缺99歲沒有被識別');
+    });
+
+    test('醫療保費沒有逐年正確套用會被識別', () => {
+      const result = fullResult(); result.schedule[71] += 1;
+      let failed = false; try { GFPaymentPlan.prepareResult(result, 'five_year', medical); } catch (error) { failed = error.message.includes('99 歲'); }
+      assert(failed, '錯誤提款排程沒有被識別');
+    });
+
+    test('四種指定及反推模式都保留35至99歲', () => {
+      const selector = document.getElementById('gfPaymentPlan');
+      for (const plan of ['five_year', 'single']) {
+        selector.value = plan; selector.dispatchEvent(new Event('change'));
+        document.getElementById('medicalStartAge').value = '35';
+        document.getElementById('medicalEndAge').value = '99';
+        for (const mode of ['minimum', 'fixed']) {
+          document.getElementById('financeMode').value = mode;
+          GFPaymentPlan.runCombinedFinance();
+          assert(currentFinanceResult?.input?.medicalStartAge === 35 && currentFinanceResult?.input?.medicalEndAge === 99, `${plan}/${mode}年期錯誤：${document.getElementById('financeError').textContent}`);
+          assert(currentFinanceResult.rows.find((row) => row.age === 99), `${plan}/${mode}欠缺99歲`);
+        }
+      }
+    });
+
+    test('五年CSV固定使用原計算匯出器避免補丁循環', () => {
+      GFFinanceCore.financeCsvText = () => { throw new Error('不應使用後來覆寫的匯出器'); };
+      const result = GFPaymentPlan.prepareResult(fullResult(), 'five_year', medical);
+      assert(window.financeCsvText(result, {}) === 'five-original', '五年CSV沒有使用原匯出器');
+    });
+
+    const report = document.createElement('pre'); report.id = 'report'; report.textContent = results.join('\n'); document.body.append(report);
+  </script>
+</body>
+</html>

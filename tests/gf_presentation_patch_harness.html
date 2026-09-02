@@ -83,16 +83,16 @@
       && document.getElementById('financePdfDownload').hidden
       && document.getElementById('financeDownloadActions').hidden;
     const result = {
-      input: { annual: 4000, total: 20000 },
-      schedule: { 70: 1000, 71: 2000, 72: 3000 },
+      input: { issueAge: 97, medicalStartAge: 98, medicalEndAge: 99, annual: 4000, total: 20000 },
+      schedule: { 1: 1000, 2: 2000, 3: 3000 },
       requestedTotal: 6000,
       actualTotal: 6000,
       surrendered: false,
       surrenderYear: null,
       rows: [
-        { age: 98, policy_year: 70, requested_withdrawal: 1000, withdrawal_total: 1000, cumulative_withdrawal: 1000, post_guaranteed_cash: 100, post_reversionary_bonus: 200, post_terminal_bonus: 300, post_surrender_total: 600, status: '已提款' },
-        { age: 99, policy_year: 71, requested_withdrawal: 2000, withdrawal_total: 2000, cumulative_withdrawal: 3000, post_guaranteed_cash: 110, post_reversionary_bonus: 210, post_terminal_bonus: 310, post_surrender_total: 630, status: '已提款' },
-        { age: 100, policy_year: 72, requested_withdrawal: 3000, withdrawal_total: 3000, cumulative_withdrawal: 6000, post_guaranteed_cash: 120, post_reversionary_bonus: 220, post_terminal_bonus: 320, post_surrender_total: 660, status: '已提款' },
+        { age: 98, policy_year: 1, requested_withdrawal: 1000, withdrawal_total: 1000, cumulative_withdrawal: 1000, post_guaranteed_cash: 100, post_reversionary_bonus: 200, post_terminal_bonus: 300, post_surrender_total: 600, status: '已提款' },
+        { age: 99, policy_year: 2, requested_withdrawal: 2000, withdrawal_total: 2000, cumulative_withdrawal: 3000, post_guaranteed_cash: 110, post_reversionary_bonus: 210, post_terminal_bonus: 310, post_surrender_total: 630, status: '已提款' },
+        { age: 100, policy_year: 3, requested_withdrawal: 3000, withdrawal_total: 3000, cumulative_withdrawal: 6000, post_guaranteed_cash: 120, post_reversionary_bonus: 220, post_terminal_bonus: 320, post_surrender_total: 660, status: '已提款' },
       ],
     };
     const originalSnapshot = JSON.stringify(result);
@@ -118,7 +118,7 @@
     test('99歲保留而100歲從UI移除', () => {
       const ages = Array.from(document.querySelectorAll('#financeTable tbody tr')).map((row) => Number(row.cells[0].textContent));
       assert(JSON.stringify(ages) === JSON.stringify([98, 99]), `UI年齡錯誤：${ages}`);
-      assert(document.getElementById('financeAgeLimitNote')?.textContent.includes('99 歲'), '欠缺99歲顯示提示');
+      assert(document.getElementById('financeAgeLimitNote')?.textContent.includes('用戶設定的 99 歲'), '欠缺99歲顯示提示');
     });
 
     test('摘要只計算至99歲', () => {
@@ -153,9 +153,10 @@
 
     test('醫療融資CSV與UI同樣截止99歲', () => {
       const csv = financeCsvText(result);
-      assert(csv.includes('"99","71","2000","3000"'), 'CSV欠缺99歲');
-      assert(!csv.includes('"100","72"'), 'CSV仍包含100歲');
+      assert(csv.includes('"99","2","2000","3000"'), 'CSV欠缺99歲');
+      assert(!csv.includes('"100","3"'), 'CSV仍包含100歲');
       assert(csv.includes('"maximum_display_age","99"'), 'CSV欠缺99歲範圍追溯');
+      assert(csv.includes('"requested_medical_end_age","99"'), 'CSV欠缺用戶設定終止年齡');
       assert(GFFinanceCore.financeCsvText(result) === csv, 'GFFinanceCore仍使用未截斷匯出');
     });
 
@@ -163,6 +164,27 @@
       assert(JSON.stringify(result) === originalSnapshot, '原始result被改寫');
       assert(currentFinanceResult === result, 'currentFinanceResult不再指向原計算結果');
       assert(result.rows.length === 3 && result.actualTotal === 6000, '引擎數值被截斷');
+    });
+
+    test('用戶設定98歲時UI與CSV均準確結束於98歲', () => {
+      const shorter = {
+        ...result,
+        input: { ...result.input, medicalStartAge: 98, medicalEndAge: 98 },
+      };
+      renderFinanceResult(shorter);
+      const ages = Array.from(document.querySelectorAll('#financeTable tbody tr')).map((row) => Number(row.cells[0].textContent));
+      assert(JSON.stringify(ages) === JSON.stringify([98]), `UI沒有按設定在98歲結束：${ages}`);
+      const csv = financeCsvText(shorter);
+      assert(csv.includes('"98","1"') && !csv.includes('"99","2"'), 'CSV沒有按設定在98歲結束');
+      assert(csv.includes('"maximum_display_age","98"'), 'CSV範圍metadata不是98歲');
+      renderFinanceResult(result);
+    });
+
+    test('欠缺設定終止年齡時不會靜默輸出較短結果', () => {
+      const incomplete = { ...result, rows: result.rows.filter((row) => row.age !== 99) };
+      let failed = false;
+      try { GFPresentationPatch.visibleResult(incomplete); } catch (error) { failed = error.message.includes('99 歲'); }
+      assert(failed, '欠缺99歲資料仍被當成完整結果');
     });
 
     test('建議書式兩層分組表頭', () => {
@@ -192,7 +214,6 @@
       assert(getComputedStyle(firstRow).display === 'table-row', '年度列被轉成卡片');
       assert(firstRow.cells[0].classList.contains('gf-sticky-age') && firstRow.cells[1].classList.contains('gf-sticky-year'), '首兩欄沒有sticky類別');
       assert(getComputedStyle(firstRow.cells[0]).position === 'sticky' && getComputedStyle(firstRow.cells[1]).position === 'sticky', '首兩欄CSS不是sticky');
-      assert(firstRow.classList.contains('gf-five-year-divider'), '第70保單年度欠缺五年分隔線');
       assert(!firstRow.cells[0].dataset.label, '仍殘留手機卡片data-label');
       assert(firstRow.cells[0].getBoundingClientRect().width <= 43 && firstRow.cells[1].getBoundingClientRect().width <= 55, '年齡或保單年度欄仍然太寬');
     });
